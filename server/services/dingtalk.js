@@ -1,10 +1,19 @@
 import axios from 'axios';
 import { dingtalkConfig } from '../config/dingtalk.js';
+import { retry, createCircuitBreaker } from '../utils/resilience.js';
 
 let accessToken = null;
 let tokenExpireTime = 0;
 const LIST_API_MODE = process.env.DINGTALK_LIST_API || 'old';
 const REQUEST_DELAY_MS = Number(process.env.DINGTALK_REQUEST_DELAY_MS || 300);
+const AXIOS_TIMEOUT_MS = Number(process.env.DINGTALK_TIMEOUT_MS || 15000);
+
+const http = axios.create({ timeout: AXIOS_TIMEOUT_MS });
+
+// Circuit breakers for DingTalk API groups
+const tokenCircuit = createCircuitBreaker({ label: 'dingtalk-token', failureThreshold: 3, resetTimeoutMs: 30000 });
+const listCircuit = createCircuitBreaker({ label: 'dingtalk-list', failureThreshold: 5, resetTimeoutMs: 60000 });
+const detailCircuit = createCircuitBreaker({ label: 'dingtalk-detail', failureThreshold: 5, resetTimeoutMs: 60000 });
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,29 +69,28 @@ export async function getAccessToken() {
     return accessToken;
   }
 
-  try {
-    const response = await axios.get(
-      `${dingtalkConfig.oapiUrl}${dingtalkConfig.getTokenUrl}`,
-      {
-        params: {
-          appkey: dingtalkConfig.appKey,
-          appsecret: dingtalkConfig.appSecret,
-        },
+  return tokenCircuit.execute(() =>
+    retry(async () => {
+      const response = await http.get(
+        `${dingtalkConfig.oapiUrl}${dingtalkConfig.getTokenUrl}`,
+        {
+          params: {
+            appkey: dingtalkConfig.appKey,
+            appsecret: dingtalkConfig.appSecret,
+          },
+        }
+      );
+
+      if (response.data && response.data.access_token) {
+        accessToken = response.data.access_token;
+        tokenExpireTime = now + (response.data.expires_in - 300) * 1000;
+        console.log('[DINGTALK] Got access token successfully');
+        return accessToken;
       }
-    );
 
-    if (response.data && response.data.access_token) {
-      accessToken = response.data.access_token;
-      tokenExpireTime = now + (response.data.expires_in - 300) * 1000;
-      console.log('[DINGTALK] Got access token:', accessToken.substring(0, 10) + '...');
-      return accessToken;
-    }
-
-    throw new Error('Failed to get access token: ' + JSON.stringify(response.data));
-  } catch (error) {
-    logDingtalkError('getAccessToken', error);
-    throw error;
-  }
+      throw new Error('Failed to get access token: ' + JSON.stringify(response.data));
+    }, { label: 'getAccessToken' })
+  );
 }
 
 async function getProcessInstanceIdsByNewApi(token, startTime, endTime) {
@@ -91,7 +99,7 @@ async function getProcessInstanceIdsByNewApi(token, startTime, endTime) {
 
   do {
     await throttleDingtalkRequest();
-    const response = await axios.post(
+    const response = await http.post(
       `${dingtalkConfig.apiUrl}${dingtalkConfig.processInstanceIdsUrl}`,
       {
         processCode: dingtalkConfig.processCode,
@@ -131,7 +139,7 @@ async function getProcessInstanceIdsByOldApi(token, startTime, endTime) {
 
   do {
     await throttleDingtalkRequest();
-    const response = await axios.post(
+    const response = await http.post(
       `${dingtalkConfig.oapiUrl}${dingtalkConfig.oldProcessInstanceIdsUrl}`,
       {
         process_code: dingtalkConfig.processCode,
@@ -175,7 +183,9 @@ export async function getProcessInstanceIds(startTime, endTime) {
 
   if (LIST_API_MODE === 'new' || LIST_API_MODE === 'both') {
     try {
-      const ids = await getProcessInstanceIdsByNewApi(token, startTime, endTime);
+      const ids = await listCircuit.execute(() =>
+        retry(() => getProcessInstanceIdsByNewApi(token, startTime, endTime), { label: 'listIds-new' })
+      );
       ids.forEach((id) => mergedIds.add(id));
     } catch (error) {
       newApiError = error;
@@ -185,7 +195,9 @@ export async function getProcessInstanceIds(startTime, endTime) {
 
   if (LIST_API_MODE === 'old' || LIST_API_MODE === 'both') {
     try {
-      const ids = await getProcessInstanceIdsByOldApi(token, startTime, endTime);
+      const ids = await listCircuit.execute(() =>
+        retry(() => getProcessInstanceIdsByOldApi(token, startTime, endTime), { label: 'listIds-old' })
+      );
       ids.forEach((id) => mergedIds.add(id));
     } catch (error) {
       oldApiError = error;
@@ -215,7 +227,7 @@ export async function getProcessInstanceIds(startTime, endTime) {
 
 async function getProcessInstanceDetailByNewApi(token, processInstanceId) {
   await throttleDingtalkRequest();
-  const response = await axios.get(
+  const response = await http.get(
     `${dingtalkConfig.apiUrl}${dingtalkConfig.processInstanceGetUrl}`,
     {
       params: { processInstanceId },
@@ -246,7 +258,7 @@ async function getProcessInstanceDetailByNewApi(token, processInstanceId) {
 
 async function getProcessInstanceDetailByOldApi(token, processInstanceId) {
   await throttleDingtalkRequest();
-  const response = await axios.post(
+  const response = await http.post(
     `${dingtalkConfig.oapiUrl}${dingtalkConfig.oldProcessInstanceGetUrl}`,
     {
       process_instance_id: processInstanceId,
@@ -280,21 +292,19 @@ async function getProcessInstanceDetailByOldApi(token, processInstanceId) {
 export async function getProcessInstanceDetail(processInstanceId) {
   const token = await getAccessToken();
 
-  try {
-    const data = await getProcessInstanceDetailByNewApi(token, processInstanceId);
-    if (!data.processInstanceId) {
-      data.processInstanceId = processInstanceId;
-    }
-    return data;
-  } catch (error) {
-    logDingtalkError('getProcessInstanceDetail new API', error);
-    console.warn('[WARN] Trying old DingTalk processinstance/get API fallback...');
-  }
-
-  try {
-    return await getProcessInstanceDetailByOldApi(token, processInstanceId);
-  } catch (error) {
-    logDingtalkError('getProcessInstanceDetail old API', error);
-    throw error;
-  }
+  return detailCircuit.execute(() =>
+    retry(async () => {
+      try {
+        const data = await getProcessInstanceDetailByNewApi(token, processInstanceId);
+        if (!data.processInstanceId) {
+          data.processInstanceId = processInstanceId;
+        }
+        return data;
+      } catch (error) {
+        logDingtalkError('getProcessInstanceDetail new API', error);
+        console.warn('[WARN] Trying old DingTalk processinstance/get API fallback...');
+        return await getProcessInstanceDetailByOldApi(token, processInstanceId);
+      }
+    }, { label: `detail-${processInstanceId}` })
+  );
 }

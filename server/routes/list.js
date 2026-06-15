@@ -1,9 +1,14 @@
 import express from 'express';
 import axios from 'axios';
 import { query } from '../db/index.js';
+import { retry, createCircuitBreaker } from '../utils/resilience.js';
 
 const router = express.Router();
+const isProduction = process.env.NODE_ENV === 'production';
 const YUNYING_API_BASE = process.env.YUNYING_API_BASE || 'http://localhost:3002';
+const YUNYING_TIMEOUT_MS = Number(process.env.YUNYING_TIMEOUT_MS || 15000);
+
+const yunyingCircuit = createCircuitBreaker({ label: 'yunying-api', failureThreshold: 3, resetTimeoutMs: 60000 });
 
 const columnCache = new Map();
 
@@ -103,10 +108,12 @@ async function fetchApprovedExpenseSummary(dateRange) {
   };
 
   try {
-    const [operation, purchase] = await Promise.all([
-      axios.get(`${YUNYING_API_BASE}/api/approvals/approved/operation/all`, { params, timeout: 15000 }),
-      axios.get(`${YUNYING_API_BASE}/api/approvals/approved/purchase/all`, { params, timeout: 15000 }),
-    ]);
+    const [operation, purchase] = await yunyingCircuit.execute(() =>
+      retry(() => Promise.all([
+        axios.get(`${YUNYING_API_BASE}/api/approvals/approved/operation/all`, { params, timeout: YUNYING_TIMEOUT_MS }),
+        axios.get(`${YUNYING_API_BASE}/api/approvals/approved/purchase/all`, { params, timeout: YUNYING_TIMEOUT_MS }),
+      ]), { label: 'yunying-approved' })
+    );
 
     const operationItems = Array.isArray(operation.data?.items) ? operation.data.items : [];
     const purchaseItems = Array.isArray(purchase.data?.items) ? purchase.data.items : [];
@@ -123,7 +130,7 @@ async function fetchApprovedExpenseSummary(dateRange) {
       detailMap.set(key, { ...item, expense_kind: 'purchase', query_month: queryMonth });
     }
   } catch (error) {
-    warnings.push(`审批支出接口不可用：${error.message}`);
+    warnings.push(isProduction ? '审批支出接口不可用' : `审批支出接口不可用：${error.message}`);
   }
 
   const details = [...detailMap.values()];
@@ -202,7 +209,7 @@ router.get('/production', async (req, res) => {
     });
   } catch (error) {
     console.error('[ERROR] List production error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
   }
 });
 
@@ -276,7 +283,7 @@ router.get('/non-production', async (req, res) => {
     });
   } catch (error) {
     console.error('[ERROR] List non-production error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
   }
 });
 
@@ -317,7 +324,7 @@ router.get('/approval', async (req, res) => {
     });
   } catch (error) {
     console.error('[ERROR] List approval error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
   }
 });
 
@@ -340,7 +347,7 @@ router.get('/stats', async (req, res) => {
     });
   } catch (error) {
     console.error('[ERROR] Stats error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
   }
 });
 
@@ -435,7 +442,7 @@ router.get('/report', async (req, res) => {
     });
   } catch (error) {
     console.error('[ERROR] Report data error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
   }
 });
 

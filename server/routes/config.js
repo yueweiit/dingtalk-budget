@@ -2,6 +2,7 @@ import express from 'express';
 import { getSchedulerStatus, startScheduler, stopScheduler } from '../services/scheduler.js';
 
 const router = express.Router();
+const isProduction = process.env.NODE_ENV === 'production';
 
 router.get('/scheduler', async (req, res) => {
   try {
@@ -12,7 +13,7 @@ router.get('/scheduler', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: isProduction ? '操作失败' : error.message,
     });
   }
 });
@@ -27,7 +28,7 @@ router.post('/scheduler/start', (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: isProduction ? '操作失败' : error.message,
     });
   }
 });
@@ -42,7 +43,7 @@ router.post('/scheduler/stop', (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: isProduction ? '操作失败' : error.message,
     });
   }
 });

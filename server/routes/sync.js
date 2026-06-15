@@ -14,6 +14,7 @@ import {
 import { query, pool } from '../db/index.js';
 
 const router = express.Router();
+const isProduction = process.env.NODE_ENV === 'production';
 
 function getApprovalState(detail) {
   const statusStr = String(detail.status || '').toUpperCase();
@@ -427,7 +428,7 @@ router.post('/', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[ERROR] Sync error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: isProduction ? '同步失败' : error.message });
   }
 });
 

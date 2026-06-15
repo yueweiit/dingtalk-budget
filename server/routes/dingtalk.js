@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../db/index.js';
 
 const router = express.Router();
+const isProduction = process.env.NODE_ENV === 'production';
 
 // 转换日期格式 20260401 -> 2026-04-01
 function convertDateFormat(dateStr) {
@@ -163,7 +164,7 @@ router.get('/querySimple', async (req, res) => {
 
   } catch (error) {
     console.error('[ERROR] Query error:', error);
-    res.status(500).json({ success: false, message: '查询失败: ' + error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : '查询失败: ' + error.message });
   }
 });
 
@@ -226,7 +227,7 @@ router.get('/query', async (req, res) => {
 
   } catch (error) {
     console.error('[ERROR] Query error:', error);
-    res.status(500).json({ success: false, message: '查询失败: ' + error.message });
+    res.status(500).json({ success: false, message: isProduction ? '查询失败' : '查询失败: ' + error.message });
   }
 });
 

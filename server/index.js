@@ -1,5 +1,16 @@
+import 'dotenv/config';
+
+const requiredEnvVars = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'DINGTALK_APP_KEY', 'DINGTALK_APP_SECRET', 'DINGTALK_PROCESS_CODE'];
+const missing = requiredEnvVars.filter((key) => !process.env[key]);
+if (missing.length > 0) {
+  console.error(`[FATAL] Missing required environment variables: ${missing.join(', ')}`);
+  console.error('Please copy .env.example to .env and fill in the values.');
+  process.exit(1);
+}
+
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import syncRouter from './routes/sync.js';
 import listRouter from './routes/list.js';
 import configRouter from './routes/config.js';
@@ -8,6 +19,7 @@ import { startScheduler } from './services/scheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === 'production';
 
 process.on('unhandledRejection', (reason) => {
   console.error('[PROCESS] Unhandled rejection:', reason);
@@ -17,12 +29,37 @@ process.on('uncaughtException', (error) => {
   console.error('[PROCESS] Uncaught exception:', error);
 });
 
+// CORS - require explicit origin in production
+const corsOrigin = process.env.CORS_ORIGIN;
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: corsOrigin || 'http://localhost:5173',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
 }));
 app.use(express.json({ limit: '2mb' }));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60000),
+  max: Number(process.env.RATE_LIMIT_MAX || 100),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: '请求过于频繁，请稍后再试' },
+});
+app.use('/api/', limiter);
+
+// API Key authentication
+const API_KEY = process.env.API_KEY;
+if (API_KEY) {
+  app.use('/api/', (req, res, next) => {
+    if (req.path === '/health') return next();
+    const key = req.headers['x-api-key'] || req.query.apiKey;
+    if (key !== API_KEY) {
+      return res.status(401).json({ success: false, message: '未授权：无效的 API Key' });
+    }
+    next();
+  });
+}
 
 app.use((req, res, next) => {
   console.log(`[HTTP] ${req.method} ${req.path}`);
@@ -38,9 +75,18 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Global error handler - hide details in production
+app.use((err, req, res, _next) => {
+  console.error('[ERROR]', err);
+  res.status(500).json({
+    success: false,
+    message: isProduction ? '服务器内部错误' : err.message,
+  });
+});
+
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[SERVER] Running on http://0.0.0.0:${PORT}`);
   console.log(`[SERVER] Running on http://localhost:${PORT}`);
+  console.log(`[SERVER] API Key auth: ${API_KEY ? 'enabled' : 'disabled (set API_KEY to enable)'}`);
   startScheduler();
 });
 
