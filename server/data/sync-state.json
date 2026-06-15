@@ -1,0 +1,35 @@
+{
+  "lastCompletedEndTime": 1781164920434,
+  "lastBackfillEndTime": 1781161320224,
+  "pendingInstances": {},
+  "lastRun": {
+    "startedAt": "2026-06-11T08:02:00.434Z",
+    "completedAt": "2026-06-11T08:02:00.846Z",
+    "window": {
+      "startTime": 1781161320224,
+      "endTime": 1781164920434,
+      "startIso": "2026-06-11T07:02:00.224Z",
+      "endIso": "2026-06-11T08:02:00.434Z"
+    },
+    "pendingSummary": {
+      "checked": 0,
+      "inserted": 0,
+      "existing": 0,
+      "stillPending": 0,
+      "removed": 0
+    },
+    "windowResult": {
+      "success": true,
+      "synced": 0,
+      "added": 0,
+      "updated": 0,
+      "existing": 0,
+      "pending": 0,
+      "skipped": 0,
+      "pendingInstances": [],
+      "terminalSkippedInstances": [],
+      "message": "No DingTalk process instances found"
+    },
+    "backfillResult": null
+  }
+}
