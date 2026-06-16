@@ -1,4 +1,9 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: join(__dirname, '.env') });
 
 const requiredEnvVars = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'DINGTALK_APP_KEY', 'DINGTALK_APP_SECRET', 'DINGTALK_PROCESS_CODE'];
 const missing = requiredEnvVars.filter((key) => !process.env[key]);
