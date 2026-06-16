@@ -173,6 +173,12 @@ const formatCurrency = (value) => {
   return num.toLocaleString();
 };
 
+/** X 轴标签过长时截断 */
+const truncateLabel = (label, maxLen = 10) => {
+  if (!label || label.length <= maxLen) return label;
+  return String(label).slice(0, maxLen) + '…';
+};
+
 /** 计算报表月份 */
 function resolveReportMonth(startDate, endDate) {
   const s = formatMonth(startDate);
@@ -329,9 +335,9 @@ export default function VisualReport({ onBack }) {
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>各部门预算分布（Top 12）</h3>
             <ResponsiveContainer width="100%" height={360}>
-              <BarChart data={deptSummary} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <BarChart data={deptSummary} margin={{ top: 5, right: 20, left: 0, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="deptName" tick={{ fontSize: 12, fill: '#6b7280' }} angle={-30} textAnchor="end" height={60} />
+                <XAxis dataKey="deptName" tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={(v) => truncateLabel(v, 8)} angle={-35} textAnchor="end" height={70} />
                 <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
@@ -390,7 +396,7 @@ export default function VisualReport({ onBack }) {
               <BarChart data={execRate} layout="vertical" margin={{ top: 5, right: 20, left: 60, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis type="number" tick={{ fontSize: 12, fill: '#6b7280' }} unit="%" />
-                <YAxis type="category" dataKey="deptName" tick={{ fontSize: 12, fill: '#6b7280' }} width={100} />
+                <YAxis type="category" dataKey="deptName" tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={(v) => truncateLabel(v, 10)} width={120} />
                 <Tooltip formatter={(value) => `${value}%`} />
                 <Bar dataKey="executionRate" name="执行率" radius={[0, 4, 4, 0]}>
                   {execRate.map((entry, index) => {
@@ -407,9 +413,9 @@ export default function VisualReport({ onBack }) {
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>部门预算 vs 已审批支出（Top 10）</h3>
             <ResponsiveContainer width="100%" height={360}>
-              <BarChart data={deptComp} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <BarChart data={deptComp} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="deptName" tick={{ fontSize: 12, fill: '#6b7280' }} angle={-30} textAnchor="end" height={60} />
+                <XAxis dataKey="deptName" tick={{ fontSize: 13, fill: '#6b7280' }} tickFormatter={(v) => truncateLabel(v, 10)} angle={-90} textAnchor="end" height={120} />
                 <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
