@@ -11,7 +11,7 @@
 | 文件 | 硬编码内容 |
 |------|-----------|
 | `server/config/dingtalk.js` | 钉钉 appKey、appSecret、processCode |
-| `server/db/index.js` | PostgreSQL host (`8.135.19.108`)、user (`postgres`)、password (`Postgres@123`) |
+| `server/db/index.js` | PostgreSQL host、user、password（已脱敏） |
 
 ### 修改内容
 
@@ -35,9 +35,9 @@
 #### 5. `server/config/dingtalk.js` — 移除硬编码 fallback
 
 ```diff
-- appKey: process.env.DINGTALK_APP_KEY || 'dingumkeaffrev8eyd5j',
-- appSecret: process.env.DINGTALK_APP_SECRET || 'mHcyqOP9s98l-buIBWn...',
-- processCode: process.env.DINGTALK_PROCESS_CODE || 'PROC-45C2862D-...',
+- appKey: process.env.DINGTALK_APP_KEY || 'dingXXX',
+- appSecret: process.env.DINGTALK_APP_SECRET || 'secretXXX',
+- processCode: process.env.DINGTALK_PROCESS_CODE || 'PROC-XXXX',
 + appKey: process.env.DINGTALK_APP_KEY,
 + appSecret: process.env.DINGTALK_APP_SECRET,
 + processCode: process.env.DINGTALK_PROCESS_CODE,
@@ -48,10 +48,10 @@
 #### 6. `server/db/index.js` — 移除硬编码凭据
 
 ```diff
-- host: process.env.PGHOST || '8.135.19.108',
+- host: process.env.PGHOST || 'xxx.xxx.xxx.xxx',
 - database: process.env.PGDATABASE || 'budget_system',
 - user: process.env.PGUSER || 'postgres',
-- password: process.env.PGPASSWORD || 'Postgres@123',
+- password: process.env.PGPASSWORD || '***',
 + host: process.env.PGHOST,
 + database: process.env.PGDATABASE,
 + user: process.env.PGUSER,
