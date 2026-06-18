@@ -71,6 +71,7 @@ export async function getAccessToken() {
 
   return tokenCircuit.execute(() =>
     retry(async () => {
+      console.log('[DINGTALK] Token request - appKey:', dingtalkConfig.appKey ? dingtalkConfig.appKey.substring(0, 6) + '***' : 'UNDEFINED');
       const response = await http.get(
         `${dingtalkConfig.oapiUrl}${dingtalkConfig.getTokenUrl}`,
         {

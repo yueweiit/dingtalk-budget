@@ -1,12 +1,23 @@
-import 'dotenv/config';
+import { config } from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+config({ path: join(__dirname, '.env') });
 
 const requiredEnvVars = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'DINGTALK_APP_KEY', 'DINGTALK_APP_SECRET', 'DINGTALK_PROCESS_CODE'];
 const missing = requiredEnvVars.filter((key) => !process.env[key]);
 if (missing.length > 0) {
   console.error(`[FATAL] Missing required environment variables: ${missing.join(', ')}`);
   console.error('Please copy .env.example to .env and fill in the values.');
+  console.error(`[FATAL] Working directory: ${process.cwd()}`);
+  console.error(`[FATAL] .env path: ${join(__dirname, '.env')}`);
   process.exit(1);
 }
+
+console.log(`[CONFIG] DINGTALK_APP_KEY: ${process.env.DINGTALK_APP_KEY ? 'loaded (' + process.env.DINGTALK_APP_KEY.substring(0, 6) + '...)' : 'MISSING'}`);
+console.log(`[CONFIG] Working directory: ${process.cwd()}`);
+console.log(`[CONFIG] .env loaded from: ${join(__dirname, '.env')}`);
 
 import express from 'express';
 import cors from 'cors';
