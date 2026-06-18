@@ -235,15 +235,17 @@ export const buildProductionRows = (records) => {
   return rows;
 };
 
-const worksheetXml = ({ rows, widths = [] }) => {
+const worksheetXml = ({ rows, widths = [], hasDrawing = false }) => {
   const lastColumn = columnName(Math.max(...rows.map((row) => row.length), 1));
   const lastRow = Math.max(rows.length, 1);
   const colsXml = widths.length
     ? `<cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols>`
     : '';
+  const drawingXml = hasDrawing ? '<drawing r:id="rId1"/>' : '';
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <dimension ref="A1:${lastColumn}${lastRow}"/>
 <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
 ${colsXml}
@@ -251,7 +253,138 @@ ${colsXml}
 ${rows.map((cells, index) => rowXml(index + 1, cells, index === 0 ? 1 : 2)).join('')}
 </sheetData>
 <autoFilter ref="A1:${lastColumn}${lastRow}"/>
+${drawingXml}
 </worksheet>`;
+};
+
+// ── Chart XML generation helpers ──────────────────────────────────────────
+
+const CHART_COLORS = ['FF2563EB', 'FF0F766E', 'FFB45309', 'FF7C3AED', 'FFDB2777', 'FF0891B2'];
+
+const chartSeriesXml = (sheetName, labelCol, valueCol, rowCount, seriesName, color) => {
+  const catRef = `'${sheetName}'!$${labelCol}$2:$${labelCol}$${rowCount}`;
+  const valRef = `'${sheetName}'!$${valueCol}$2:$${valueCol}$${rowCount}`;
+  return `<c:ser>
+<c:idx val="0"/><c:order val="0"/>
+<c:tx><c:strRef><c:f>${sheetName}!$${valueCol}$1</c:f></c:strRef></c:tx>
+<c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>
+<c:cat><c:strRef><c:f>${catRef}</c:f></c:strRef></c:cat>
+<c:val><c:numRef><c:f>${valRef}</c:f></c:numRef></c:val>
+</c:ser>`;
+};
+
+const barChartXml = ({ sheetName, labelCol, series, rowCount, title, grouping = 'clustered', barDir = 'col' }) => {
+  const seriesXml = series.map((s, i) =>
+    `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>
+<c:tx><c:strRef><c:f>'${sheetName}'!$${s.col}$1</c:f></c:strRef></c:tx>
+<c:spPr><a:solidFill><a:srgbClr val="${CHART_COLORS[i % CHART_COLORS.length]}"/></a:solidFill></c:spPr>
+<c:cat><c:strRef><c:f>'${sheetName}'!$${labelCol}$2:$${labelCol}$${rowCount}</c:f></c:strRef></c:cat>
+<c:val><c:numRef><c:f>'${sheetName}'!$${s.col}$2:$${s.col}$${rowCount}</c:f></c:numRef></c:val>
+</c:ser>`
+  ).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+<a:p><a:r><a:rPr lang="zh-CN" sz="1200" b="1"/><a:t>${escapeXml(title)}</a:t></a:r></a:p>
+</c:rich></c:tx></c:title><c:autoTitleDeleted val="0"/>
+<c:plotArea><c:layout/>
+<c:barChart><c:barDir val="${barDir}"/><c:grouping val="${grouping}"/>
+<c:varyColors val="0"/>${seriesXml}
+<c:axId val="1"/><c:axId val="2"/>
+</c:barChart>
+<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+<c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
+<c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+<c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
+</c:plotArea><c:legend><c:legendPos val="b"/></c:legend>
+</c:chart></c:chartSpace>`;
+};
+
+const lineChartXml = ({ sheetName, labelCol, series, rowCount, title }) => {
+  const seriesXml = series.map((s, i) =>
+    `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>
+<c:tx><c:strRef><c:f>'${sheetName}'!$${s.col}$1</c:f></c:strRef></c:tx>
+<c:spPr><a:ln w="22225"><a:solidFill><a:srgbClr val="${CHART_COLORS[i % CHART_COLORS.length]}"/></a:solidFill></a:ln></c:spPr>
+<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>
+<c:cat><c:strRef><c:f>'${sheetName}'!$${labelCol}$2:$${labelCol}$${rowCount}</c:f></c:strRef></c:cat>
+<c:val><c:numRef><c:f>'${sheetName}'!$${s.col}$2:$${s.col}$${rowCount}</c:f></c:numRef></c:val>
+</c:ser>`
+  ).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+<a:p><a:r><a:rPr lang="zh-CN" sz="1200" b="1"/><a:t>${escapeXml(title)}</a:t></a:r></a:p>
+</c:rich></c:tx></c:title><c:autoTitleDeleted val="0"/>
+<c:plotArea><c:layout/>
+<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>
+${seriesXml}<c:marker val="1"/><c:axId val="1"/><c:axId val="2"/>
+</c:lineChart>
+<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+<c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>
+<c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling>
+<c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>
+</c:plotArea><c:legend><c:legendPos val="b"/></c:legend>
+</c:chart></c:chartSpace>`;
+};
+
+const pieChartXml = ({ sheetName, labelCol, valueCol, rowCount, title }) => {
+  const slicesXml = Array.from({ length: rowCount - 1 }, (_, i) =>
+    `<c:dPt><c:idx val="${i}"/><c:spPr><a:solidFill><a:srgbClr val="${CHART_COLORS[i % CHART_COLORS.length]}"/></a:solidFill></c:spPr></c:dPt>`
+  ).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+<a:p><a:r><a:rPr lang="zh-CN" sz="1200" b="1"/><a:t>${escapeXml(title)}</a:t></a:r></a:p>
+</c:rich></c:tx></c:title><c:autoTitleDeleted val="0"/>
+<c:plotArea><c:layout/>
+<c:pieChart><c:varyColors val="1"/>
+<c:ser><c:idx val="0"/><c:order val="0"/>
+${slicesXml}
+<c:cat><c:strRef><c:f>'${sheetName}'!$${labelCol}$2:$${labelCol}$${rowCount}</c:f></c:strRef></c:cat>
+<c:val><c:numRef><c:f>'${sheetName}'!$${valueCol}$2:$${valueCol}$${rowCount}</c:f></c:numRef></c:val>
+</c:ser>
+</c:pieChart>
+</c:plotArea><c:legend><c:legendPos val="b"/></c:legend>
+</c:chart></c:chartSpace>`;
+};
+
+const drawingXml = (charts) => {
+  const anchors = charts.map((chart, i) => {
+    const fromCol = 5; // F
+    const fromRow = 1;
+    const toCol = fromCol + 15;
+    const toRow = fromRow + 20;
+    return `<xdr:twoCellAnchor>
+<xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+<xdr:to><xdr:col>${toCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+<xdr:graphicFrame macro="">
+<xdr:nvGraphicFramePr><xdr:cNvPr id="${i + 2}" name="Chart ${i + 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>
+<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>
+<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId${i + 1}"/>
+</a:graphicData></a:graphic>
+</xdr:graphicFrame><xdr:clientData/>
+</xdr:twoCellAnchor>`;
+  }).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+${anchors}
+</xdr:wsDr>`;
+};
+
+const drawingRelsXml = (chartRids) => {
+  const rels = chartRids.map((rid) =>
+    `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/${rid.replace('rId', 'chart')}.xml"/>`
+  ).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${rels}
+</Relationships>`;
 };
 
 const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -382,15 +515,6 @@ const workbookRelsXmlForSheets = (sheets) => `<?xml version="1.0" encoding="UTF-
   ${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}
   <Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`;
-
-const contentTypesXmlForSheets = (sheets) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  ${sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}
-  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-</Types>`;
 
 export const toAmount = (value) => {
   if (value === null || value === undefined || value === '') return 0;
@@ -845,6 +969,22 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ]),
   ];
 
+  // ── Charts: define which sheets get embedded charts ────────────────────
+
+  const deptBudgetRowCount = deptBudgetRows.length + 1;
+  const trendRowCount = trendRows.length + 1;
+  const execRateRowCount = execRateRows.length + 1;
+  const deptCompRowCount = deptCompRows.length + 1;
+
+  // Sheet index (1-based) → chart definition
+  const chartDefs = [
+    { sheetIndex: 3, sheetName: '部门预算分布', chart: barChartXml({ sheetName: '部门预算分布', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }], rowCount: deptBudgetRowCount, title: '各部门预算分布', grouping: 'clustered' }) },
+    { sheetIndex: 4, sheetName: '月度预算趋势', chart: lineChartXml({ sheetName: '月度预算趋势', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }, { col: 'E' }], rowCount: trendRowCount, title: '月度预算趋势' }) },
+    { sheetIndex: 5, sheetName: '预算类型占比', chart: pieChartXml({ sheetName: '预算类型占比', labelCol: 'A', valueCol: 'B', rowCount: 4, title: '预算类型占比' }) },
+    { sheetIndex: 6, sheetName: '部门执行率', chart: barChartXml({ sheetName: '部门执行率', labelCol: 'B', series: [{ col: 'G' }], rowCount: execRateRowCount, title: '各部门执行率', grouping: 'clustered', barDir: 'bar' }) },
+    { sheetIndex: 7, sheetName: '预算vs已审批', chart: barChartXml({ sheetName: '预算vs已审批', labelCol: 'B', series: [{ col: 'D' }, { col: 'E' }], rowCount: deptCompRowCount, title: '预算 vs 已审批支出', grouping: 'clustered' }) },
+  ];
+
   const sheets = [
     { name: '汇总', rows: summarySheetRows, widths: [28, 18] },
     { name: '预算执行', rows: executionSheetRows, widths: [8, 28, 14, 16, 18, 16, 18, 18, 18, 18, 14, 16, 16] },
@@ -860,15 +1000,52 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '生产预算明细', rows: productionSheetRows, widths: [8, 22, 14, 14, 14, 16, 16, 24, 22, 10, 12, 14, 14, 16, 16, 16, 16, 16, 26, 14, 24, 22] },
   ];
 
+  const chartSet = new Set(chartDefs.map((d) => d.sheetIndex));
+
+  // Content types with chart and drawing overrides
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  ${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n  ')}
+  ${chartDefs.map((_, i) => `<Override PartName="/xl/charts/chart${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`).join('\n  ')}
+  ${chartDefs.map((d) => `<Override PartName="/xl/drawings/drawing${d.sheetIndex}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`).join('\n  ')}
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
   const files = [
-    { name: '[Content_Types].xml', content: contentTypesXmlForSheets(sheets) },
+    { name: '[Content_Types].xml', content: contentTypesXml },
     { name: '_rels/.rels', content: rootRelsXml },
     { name: 'xl/workbook.xml', content: workbookXmlForSheets(sheets) },
     { name: 'xl/_rels/workbook.xml.rels', content: workbookRelsXmlForSheets(sheets) },
     { name: 'xl/styles.xml', content: stylesXml },
     ...sheets.map((sheet, index) => ({
       name: `xl/worksheets/sheet${index + 1}.xml`,
-      content: worksheetXml({ rows: sheet.rows, widths: sheet.widths }),
+      content: worksheetXml({ rows: sheet.rows, widths: sheet.widths, hasDrawing: chartSet.has(index + 1) }),
+    })),
+    // Chart XML files
+    ...chartDefs.map((def, i) => ({
+      name: `xl/charts/chart${i + 1}.xml`,
+      content: def.chart,
+    })),
+    // Drawing XML files (one per sheet with a chart)
+    ...chartDefs.map((def) => ({
+      name: `xl/drawings/drawing${def.sheetIndex}.xml`,
+      content: drawingXml([{ rid: 'rId1' }]),
+    })),
+    // Drawing relationship files
+    ...chartDefs.map((def, i) => ({
+      name: `xl/drawings/_rels/drawing${def.sheetIndex}.xml.rels`,
+      content: drawingRelsXml(['rId1']),
+    })),
+    // Sheet relationship files (for sheets with drawings)
+    ...chartDefs.map((def) => ({
+      name: `xl/worksheets/_rels/sheet${def.sheetIndex}.xml.rels`,
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${def.sheetIndex}.xml"/>
+</Relationships>`,
     })),
   ];
 
