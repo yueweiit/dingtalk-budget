@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import DateFilter from '../components/DateFilter';
 import SyncButton from '../components/SyncButton';
-import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData, api } from '../api';
+import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
 
 const styles = {
@@ -367,14 +367,9 @@ export default function BudgetList({ onGoToVisual }) {
     setExporting(true);
     try {
       const result = await getReportData({ startDate, endDate, includeApproved: 1 });
-      // 调后端生成 Excel（服务端 exceljs 多 Sheet 正常）
-      const response = await api.post('/report/export', {
-        ...result.data,
-        reportStartDate: startDate,
-        reportEndDate: endDate,
-      }, { responseType: 'blob' });
+      const workbook = createBudgetReportWorkbook(result.data || {});
       const filename = `预算报表_${startDate || '开始'}_${endDate || '结束'}.xlsx`;
-      saveWorkbook(response.data, filename);
+      saveWorkbook(workbook, filename);
     } catch (error) {
       console.error('Export report error:', error);
       window.alert(`导出失败：${error.response?.data?.message || error.message || '未知错误'}`);
