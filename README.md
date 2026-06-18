@@ -72,9 +72,10 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 │   │   ├── parser.js          # DingTalk form field parser (CN/ES bilingual)
 │   │   └── scheduler.js       # Cron scheduler + pending recheck + backfill
 │   └── utils/
-│       └── resilience.js      # Retry (exponential backoff) + Circuit Breaker
+│       ├── resilience.js      # Retry (exponential backoff) + Circuit Breaker
+│       └── db.js              # Table name whitelist validation
 ├── public.sql                 # Full DDL for fresh database setup
-├── migrate_*.sql              # Incremental migration scripts
+├── migrate.sql                # Idempotent migration for existing databases
 └── SECURITY_CHANGELOG.md      # Security hardening changelog
 ```
 

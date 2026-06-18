@@ -1,5 +1,6 @@
 import express from 'express';
 import { query } from '../db/index.js';
+import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -103,6 +104,8 @@ router.get('/querySimple', async (req, res) => {
       return res.json({ budgetAmount: '0' });
     }
 
+    assertValidTable(tableName);
+
     let whereClause = 'WHERE 1=1';
     const params = [];
     let paramIndex = 1;
@@ -154,10 +157,10 @@ router.get('/querySimple', async (req, res) => {
 
     const targetData = result.rows[0];
 
-    const isProduction = tableName === 'production_budget';
+    const isProductionBudget = tableName === 'production_budget';
 
     // 只返回本月预算金额
-    const budgetAmount = isProduction
+    const budgetAmount = isProductionBudget
       ? (targetData.monthly_budget_amount || 0)
       : (targetData.budget_amount || 0);
     res.json({ budgetAmount: String(budgetAmount) });
@@ -180,7 +183,7 @@ router.get('/query', async (req, res) => {
       });
     }
 
-    const tableName = resolveTableName(type) || 'production_budget';
+    const tableName = assertValidTable(resolveTableName(type) || 'production_budget');
 
     let whereClause = 'WHERE 1=1';
     const params = [];

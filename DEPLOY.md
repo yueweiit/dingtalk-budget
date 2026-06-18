@@ -46,7 +46,8 @@ npm install -g pm2
 /www/wwwroot/dingtalk-budget/
 ├── server/          # 后端
 ├── client/          # 前端
-├── public.sql       # 建表脚本
+├── public.sql       # 全新安装建表脚本
+├── migrate.sql      # 已有数据库增量升级脚本（幂等）
 └── DEPLOY.md
 ```
 
@@ -87,11 +88,19 @@ SYNC_CRON=2 * * * *
 
 ### 3. 初始化数据库
 
-在宝塔「数据库」中找到 `budget_system`，点击「管理」进入 phpPgAdmin（或通过命令行）：
+**全新安装：**
 
 ```bash
 psql -U postgres -d budget_system -f /www/wwwroot/dingtalk-budget/public.sql
 ```
+
+**已有数据库升级：**
+
+```bash
+psql -U postgres -d budget_system -f /www/wwwroot/dingtalk-budget/migrate.sql
+```
+
+`migrate.sql` 是幂等的，可安全重复执行。
 
 ### 4. 安装依赖并启动
 
@@ -123,11 +132,20 @@ npx vite build
 
 构建产物在 `client/dist/`。
 
-### 2. 修改 API 地址
+### 2. 配置前端环境变量
 
-构建前编辑 `client/src/api/index.js`，将 baseURL 改为服务器地址（或通过 Vite 代理保留 `/api`）。
+```bash
+cd /www/wwwroot/dingtalk-budget/client
+cp .env.example .env
+```
 
-如果用 Nginx 反向代理（推荐），保留 `baseURL: '/api'` 不变。
+编辑 `.env`，填入与后端 `API_KEY` 一致的值：
+
+```ini
+VITE_API_KEY=DingTalk_Budget_2026_7x9KmP2bts
+```
+
+如果用 Nginx 反向代理（推荐），`baseURL` 保持 `/api` 不变，无需修改 `api/index.js`。
 
 ### 3. Nginx 配置
 

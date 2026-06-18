@@ -2,6 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import { query } from '../db/index.js';
 import { retry, createCircuitBreaker } from '../utils/resilience.js';
+import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
 const isProduction = process.env.NODE_ENV === 'production';

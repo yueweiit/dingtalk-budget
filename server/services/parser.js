@@ -305,7 +305,3 @@ export function parseOperationItems(dingtalkData) {
   return rows.map((row) => ({ ...parseNonProductionRow(row, 'operation'), form_no: dingtalkData.businessId }))
     .filter((item) => item.budget_purpose_detail || item.amount);
 }
-
-export function parseNonProductionMaterialItems(dingtalkData) {
-  return parseOperationItems(dingtalkData);
-}

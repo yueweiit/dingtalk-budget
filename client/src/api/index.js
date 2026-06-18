@@ -1,11 +1,14 @@
 import axios from 'axios';
 
+const headers = {};
+if (import.meta.env.VITE_API_KEY) {
+  headers['X-API-Key'] = import.meta.env.VITE_API_KEY;
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
-  headers: {
-    'X-API-Key': 'DingTalk_Budget_2026_7x9KmP2bts',
-  },
+  headers,
 });
 
 // 同步钉钉数据

@@ -199,6 +199,29 @@ ALTER TABLE "public"."budget_operation" DROP CONSTRAINT IF EXISTS "budget_hr_pke
 ALTER TABLE "public"."budget_operation" ADD CONSTRAINT "budget_operation_pkey" PRIMARY KEY ("id");
 COMMENT ON TABLE "public"."budget_operation" IS '非生产预算-管理支出预算';
 
+-- 审批流程记录表
+DROP SEQUENCE IF EXISTS "public"."approval_flow_id_seq" CASCADE;
+CREATE SEQUENCE "public"."approval_flow_id_seq" INCREMENT 1 START 1 CACHE 1;
+
+DROP TABLE IF EXISTS "public"."approval_flow" CASCADE;
+CREATE TABLE "public"."approval_flow" (
+  "id" int8 NOT NULL DEFAULT nextval('approval_flow_id_seq'::regclass),
+  "form_no" varchar(50) NOT NULL,
+  "process_instance_id" varchar(100),
+  "budget_type" varchar(20),
+  "step" int4 DEFAULT 0,
+  "approver_name" varchar(100),
+  "approver_userid" varchar(100),
+  "approve_result" varchar(50),
+  "approve_opinion" text,
+  "approve_time" timestamp(6),
+  "tenant_id" varchar(50) DEFAULT 'default',
+  CONSTRAINT "approval_flow_pkey" PRIMARY KEY ("id")
+);
+COMMENT ON TABLE "public"."approval_flow" IS '审批流程记录表';
+
+ALTER SEQUENCE "public"."approval_flow_id_seq" OWNED BY "public"."approval_flow"."id";
+
 ALTER SEQUENCE "public"."production_budget_id_seq" OWNED BY "public"."production_budget"."id";
 ALTER SEQUENCE "public"."non_production_budget_id_seq" OWNED BY "public"."non_production_budget"."id";
 ALTER SEQUENCE "public"."budget_material_id_seq" OWNED BY "public"."budget_material"."id";
@@ -218,3 +241,5 @@ CREATE INDEX "idx_budget_labor_form_no" ON "public"."budget_labor" ("form_no");
 CREATE INDEX "idx_budget_hr_form_no" ON "public"."budget_hr" ("form_no");
 CREATE INDEX "idx_budget_office_form_no" ON "public"."budget_office" ("form_no");
 CREATE INDEX "idx_budget_operation_form_no" ON "public"."budget_operation" ("form_no");
+CREATE INDEX "idx_approval_flow_form_no" ON "public"."approval_flow" ("form_no");
+CREATE INDEX "idx_approval_flow_instance_id" ON "public"."approval_flow" ("process_instance_id");

@@ -12,6 +12,7 @@ import {
   getBudgetType,
 } from '../services/parser.js';
 import { query, pool } from '../db/index.js';
+import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -151,7 +152,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
 
   const formNo = detail.businessId;
   const budgetType = getBudgetType(detail);
-  const tableName = budgetType === 'production' ? 'production_budget' : 'non_production_budget';
+  const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
 
   console.log(`[SYNC] Sync instance: processInstanceId=${processInstanceId}, formNo=${formNo}, budgetType=${budgetType}`);
 
