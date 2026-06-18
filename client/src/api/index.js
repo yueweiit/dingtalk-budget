@@ -3,6 +3,9 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  headers: {
+    'X-API-Key': 'DingTalk_Budget_2026_7x9KmP2bts',
+  },
 });
 
 // 同步钉钉数据

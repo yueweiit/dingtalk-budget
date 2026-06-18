@@ -294,7 +294,7 @@ const displayValue = (value) => {
   return value;
 };
 
-export default function BudgetList() {
+export default function BudgetList({ onGoToVisual }) {
   const [activeTab, setActiveTab] = useState('production');
   const [startDate, setStartDate] = useState(dayjs().subtract(30, 'day').format('YYYY-MM-DD'));
   const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -450,6 +450,14 @@ export default function BudgetList() {
                 </button>
               ))}
             </div>
+            {onGoToVisual && (
+              <button
+                style={{ ...styles.exportButton, background: '#2563eb', borderColor: '#2563eb' }}
+                onClick={onGoToVisual}
+              >
+                可视化报表
+              </button>
+            )}
             <button
               style={{ ...styles.exportButton, opacity: exporting ? 0.65 : 1 }}
               onClick={handleExport}

@@ -1,193 +1,193 @@
-# 钉钉预算管理系统
+# DingTalk Budget Management System
 
-从钉钉审批流程同步预算数据到 PostgreSQL，提供 Web 管理后台，支持查询、筛选和报表导出。
+A budget management system that syncs approval data from DingTalk (钉钉) into PostgreSQL, providing a web dashboard for querying, filtering, and exporting budget reports.
 
-## 系统架构
+## Architecture
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   钉钉开放平台  │────>│  Express 服务  │────>│  PostgreSQL  │
-│   API        │     │   (Node.js)  │     │ budget_system │
+│   DingTalk   │────>│   Express    │────>│  PostgreSQL  │
+│   Open API   │     │   Server     │     │  budget_system│
 └──────────────┘     └──────┬───────┘     └──────────────┘
                             │
                      ┌──────┴───────┐
-                     │  React 前端   │
+                     │  React SPA   │
                      │  (Vite)      │
                      └──────────────┘
 ```
 
-- **服务端**：Node.js + Express，通过 cron 定时同步钉钉审批流程
-- **前端**：React 18 + Vite 单页应用，支持日期筛选和 XLSX 报表导出
-- **数据库**：PostgreSQL，共 8 张表（2 张主表 + 6 张明细表）
+- **Server**: Node.js + Express, syncs DingTalk approval processes on a cron schedule
+- **Client**: React 18 + Vite, single-page dashboard with date filtering and XLSX export
+- **Database**: PostgreSQL with 8 tables (2 main + 6 detail tables)
 
-## 功能特性
+## Features
 
-- 定时增量同步钉钉审批数据（cron 调度）
-- 手动同步，支持选择日期范围
-- 生产预算 / 非生产预算分页列表
-- 预算详情弹窗，展示完整表单数据
-- 7 个 Sheet 的 XLSX 报表导出（汇总、预算执行、部门占比、支出明细等）
-- 钉钉机器人查询接口（`/api/dingtalk/querySimple`）
-- 暂未通过的审批自动回查 + 补录机制
-- API Key 认证、速率限制、熔断器
+- Automatic incremental sync from DingTalk approval workflows (cron-based)
+- Manual sync with date range selection
+- Production / Non-production budget tabs with pagination
+- Budget detail modal with full form data
+- 7-sheet XLSX report export (summary, execution, department share, expense details, etc.)
+- DingTalk bot query endpoint (`/api/dingtalk/querySimple`)
+- Pending approval auto-retry with backfill mechanism
+- API Key authentication, rate limiting, circuit breaker
 
-## 技术栈
+## Tech Stack
 
-| 层       | 技术                                 |
-| -------- | ------------------------------------ |
-| 前端     | React 18、Vite、Axios、dayjs         |
-| 后端     | Express、node-cron、pg、dotenv       |
-| 数据库   | PostgreSQL                           |
-| 外部依赖 | 钉钉开放平台 API                     |
+| Layer    | Stack                              |
+| -------- | ---------------------------------- |
+| Frontend | React 18, Vite, Axios, dayjs      |
+| Backend  | Express, node-cron, pg, dotenv     |
+| Database | PostgreSQL                         |
+| External | DingTalk Open Platform API         |
 
-## 项目结构
+## Project Structure
 
 ```
-├── client/                    # React 前端
+├── client/                    # React frontend
 │   ├── src/
-│   │   ├── main.jsx           # 入口
-│   │   ├── App.jsx            # 根组件
+│   │   ├── main.jsx           # Entry point
+│   │   ├── App.jsx            # Root component
 │   │   ├── pages/
-│   │   │   └── BudgetList.jsx # 主页面（列表 + 详情 + 导出）
+│   │   │   └── BudgetList.jsx # Main page (list + detail + export)
 │   │   ├── components/
-│   │   │   ├── DateFilter.jsx # 日期筛选
-│   │   │   └── SyncButton.jsx # 手动同步按钮
-│   │   ├── api/index.js       # Axios API 封装
+│   │   │   ├── DateFilter.jsx # Date range filter
+│   │   │   └── SyncButton.jsx # Manual sync trigger
+│   │   ├── api/index.js       # Axios API layer
 │   │   └── utils/
-│   │       └── xlsxReport.js  # 前端 XLSX 生成
+│   │       └── xlsxReport.js  # Client-side XLSX generation
 │   └── index.html
-├── server/                    # Express 后端
-│   ├── index.js               # 入口，中间件配置
+├── server/                    # Express backend
+│   ├── index.js               # Entry point, middleware setup
 │   ├── config/
-│   │   └── dingtalk.js        # 钉钉 API 配置
+│   │   └── dingtalk.js        # DingTalk API config
 │   ├── db/
-│   │   └── index.js           # PostgreSQL 连接池
+│   │   └── index.js           # PostgreSQL connection pool
 │   ├── routes/
-│   │   ├── sync.js            # POST /api/sync — 数据同步
-│   │   ├── list.js            # GET /api/list/* — 列表查询
-│   │   ├── config.js          # GET/POST /api/config/scheduler* — 调度管理
-│   │   └── dingtalk.js        # GET /api/dingtalk/* — 钉钉机器人查询
+│   │   ├── sync.js            # POST /api/sync
+│   │   ├── list.js            # GET /api/list/*
+│   │   ├── config.js          # GET/POST /api/config/scheduler*
+│   │   └── dingtalk.js        # GET /api/dingtalk/*
 │   ├── services/
-│   │   ├── dingtalk.js        # 钉钉 API 客户端（超时 + 重试 + 熔断）
-│   │   ├── parser.js          # 钉钉表单字段解析（中西双语）
-│   │   └── scheduler.js       # cron 调度 + pending 回查 + backfill
+│   │   ├── dingtalk.js        # DingTalk API client (timeout + retry + circuit breaker)
+│   │   ├── parser.js          # DingTalk form field parser (CN/ES bilingual)
+│   │   └── scheduler.js       # Cron scheduler + pending recheck + backfill
 │   └── utils/
-│       └── resilience.js      # 重试（指数退避）+ 熔断器
-├── public.sql                 # 完整建表 DDL
-├── migrate_*.sql              # 增量迁移脚本
-└── SECURITY_CHANGELOG.md      # 安全加固记录
+│       └── resilience.js      # Retry (exponential backoff) + Circuit Breaker
+├── public.sql                 # Full DDL for fresh database setup
+├── migrate_*.sql              # Incremental migration scripts
+└── SECURITY_CHANGELOG.md      # Security hardening changelog
 ```
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Prerequisites
 
 - Node.js >= 16
-- PostgreSQL 数据库
+- PostgreSQL database
 
-### 1. 初始化数据库
+### 1. Setup Database
 
 ```bash
 psql -U postgres -d budget_system -f public.sql
 ```
 
-### 2. 配置环境变量
+### 2. Configure Environment
 
 ```bash
 cd server
 cp .env.example .env
-# 编辑 .env 填入实际值
+# Edit .env with your actual values
 ```
 
-必填变量：
+Required variables:
 
-| 变量                    | 说明               |
-| ---------------------- | ------------------ |
-| `PGHOST`               | PostgreSQL 主机地址 |
-| `PGDATABASE`           | 数据库名称          |
-| `PGUSER`               | 数据库用户          |
-| `PGPASSWORD`           | 数据库密码          |
-| `DINGTALK_APP_KEY`     | 钉钉应用 AppKey     |
-| `DINGTALK_APP_SECRET`  | 钉钉应用 AppSecret  |
-| `DINGTALK_PROCESS_CODE` | 钉钉审批流程编码    |
+| Variable              | Description                  |
+| --------------------- | ---------------------------- |
+| `PGHOST`              | PostgreSQL host              |
+| `PGDATABASE`          | Database name                |
+| `PGUSER`              | Database user                |
+| `PGPASSWORD`          | Database password            |
+| `DINGTALK_APP_KEY`    | DingTalk app key             |
+| `DINGTALK_APP_SECRET` | DingTalk app secret          |
+| `DINGTALK_PROCESS_CODE` | DingTalk approval process code |
 
-可选变量：
+Optional variables:
 
-| 变量                     | 默认值                | 说明                         |
-| ----------------------- | -------------------- | ---------------------------- |
-| `PORT`                  | `3001`               | 服务端口                      |
-| `CORS_ORIGIN`           | `http://localhost:5173` | 允许的跨域来源               |
-| `API_KEY`               | （禁用）              | 设置后启用 API Key 认证       |
-| `NODE_ENV`              | （空）                | 设为 `production` 隐藏错误详情 |
-| `SYNC_CRON`             | `2 * * * *`          | 同步调度（cron 表达式）        |
-| `DINGTALK_TIMEOUT_MS`   | `15000`              | 钉钉 API 超时时间（毫秒）      |
-| `RETRY_COUNT`           | `3`                  | 最大重试次数                  |
-| `CB_FAILURE_THRESHOLD`  | `5`                  | 连续失败多少次触发熔断         |
+| Variable                | Default              | Description                    |
+| ----------------------- | -------------------- | ------------------------------ |
+| `PORT`                  | `3001`               | Server port                    |
+| `CORS_ORIGIN`           | `http://localhost:5173` | Allowed CORS origin         |
+| `API_KEY`               | (disabled)           | Enable API Key auth if set     |
+| `NODE_ENV`              | (empty)              | Set `production` to hide errors|
+| `SYNC_CRON`             | `2 * * * *`          | Sync schedule (cron expression)|
+| `DINGTALK_TIMEOUT_MS`   | `15000`              | DingTalk API timeout           |
+| `RETRY_COUNT`           | `3`                  | Max retry attempts             |
+| `CB_FAILURE_THRESHOLD`  | `5`                  | Failures before circuit opens  |
 
-### 3. 安装依赖
+### 3. Install Dependencies
 
 ```bash
-# 服务端
+# Server
 cd server && npm install
 
-# 前端
+# Client
 cd ../client && npm install
 ```
 
-### 4. 启动
+### 4. Start
 
 ```bash
-# 服务端（端口 3001）
+# Server (port 3001)
 cd server && npm start
 
-# 前端（端口 5173）
+# Client (port 5173)
 cd client && npm run dev
 ```
 
-浏览器打开 http://localhost:5173
+Open http://localhost:5173 in your browser.
 
-## API 接口
+## API Endpoints
 
-| 方法   | 路径                            | 说明               |
-| ------ | ------------------------------- | ------------------ |
-| POST   | `/api/sync`                     | 同步钉钉数据        |
-| GET    | `/api/list/production`          | 生产预算列表        |
-| GET    | `/api/list/non-production`      | 非生产预算列表      |
-| GET    | `/api/list/stats`               | 统计数据            |
-| GET    | `/api/list/report`              | 报表导出数据        |
-| GET    | `/api/list/approval`            | 审批流程记录        |
-| GET    | `/api/config/scheduler`         | 调度任务状态        |
-| POST   | `/api/config/scheduler/start`   | 启动调度任务        |
-| POST   | `/api/config/scheduler/stop`    | 停止调度任务        |
-| GET    | `/api/dingtalk/querySimple`     | 钉钉机器人查询      |
-| GET    | `/api/health`                   | 健康检查            |
+| Method | Path                            | Description              |
+| ------ | ------------------------------- | ------------------------ |
+| POST   | `/api/sync`                     | Sync DingTalk data       |
+| GET    | `/api/list/production`          | Production budget list   |
+| GET    | `/api/list/non-production`      | Non-production budget list |
+| GET    | `/api/list/stats`               | Dashboard statistics     |
+| GET    | `/api/list/report`              | Report export data       |
+| GET    | `/api/list/approval`            | Approval flow records    |
+| GET    | `/api/config/scheduler`         | Scheduler status         |
+| POST   | `/api/config/scheduler/start`   | Start scheduler          |
+| POST   | `/api/config/scheduler/stop`    | Stop scheduler           |
+| GET    | `/api/dingtalk/querySimple`     | DingTalk bot query       |
+| GET    | `/api/health`                   | Health check             |
 
-## 数据库表结构
+## Database Schema
 
-**主表：**
-- `production_budget` — 生产预算申请
-- `non_production_budget` — 非生产预算申请
+**Main Tables:**
+- `production_budget` - Production budget applications
+- `non_production_budget` - Non-production budget applications
 
-**生产明细表：**
-- `budget_material` — 物料预算
-- `budget_production` — 生产费用预算
-- `budget_labor` — 人工成本预算
+**Detail Tables (production):**
+- `budget_material` - Material budget
+- `budget_production` - Production expense budget
+- `budget_labor` - Labor cost budget
 
-**非生产明细表：**
-- `budget_hr` — 人资预算
-- `budget_office` — 办公场地预算
-- `budget_operation` — 管理支出预算
+**Detail Tables (non-production):**
+- `budget_hr` - HR budget
+- `budget_office` - Office space budget
+- `budget_operation` - Management expense budget
 
-## 安全机制
+## Security
 
-详见 [SECURITY_CHANGELOG.md](SECURITY_CHANGELOG.md)，包括：
-- 环境变量管理（dotenv），移除源码中的硬编码凭据
-- API Key 认证
-- 速率限制
-- 生产环境错误信息隐藏
-- 指数退避重试
-- 熔断器模式
+See [SECURITY_CHANGELOG.md](SECURITY_CHANGELOG.md) for details on:
+- Environment variable management (dotenv)
+- API Key authentication
+- Rate limiting
+- Error message sanitization
+- Retry with exponential backoff
+- Circuit breaker pattern
 
-## 许可证
+## License
 
-私有项目。
+Private project.
