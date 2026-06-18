@@ -20,6 +20,7 @@ import syncRouter from './routes/sync.js';
 import listRouter from './routes/list.js';
 import configRouter from './routes/config.js';
 import dingtalkRouter from './routes/dingtalk.js';
+import reportRouter from './routes/report.js';
 import { startScheduler } from './services/scheduler.js';
 
 const app = express();
@@ -41,7 +42,7 @@ app.use(cors({
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
 }));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // Rate limiting
 const limiter = rateLimit({
@@ -75,6 +76,7 @@ app.use('/api/sync', syncRouter);
 app.use('/api/list', listRouter);
 app.use('/api/config', configRouter);
 app.use('/api/dingtalk', dingtalkRouter);
+app.use('/api/report', reportRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
