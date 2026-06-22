@@ -137,6 +137,54 @@ export function buildRegionDistribution(productionRecords, nonProductionRecords)
 }
 
 /**
+ * 预算执行状态分布（按部门），用于横向堆叠条形图
+ * 返回格式: [{ deptName, executed, inProgress, unexecuted, total }]
+ */
+export function buildExecutionStatus(executionRows, productionRecords, nonProductionRecords) {
+  const deptMap = new Map();
+
+  // 1. 从 executionRows 汇总已执行金额 + 预算总额
+  for (const row of executionRows) {
+    const dept = (row.deptName || '未知').trim();
+    const cur = deptMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+    cur.totalBudget += toAmount(row.totalBudget);
+    cur.executed += toAmount(row.totalApproved);
+    deptMap.set(dept, cur);
+  }
+
+  // 2. 从原始预算记录汇总「审批中」金额
+  const addPending = (records) => {
+    for (const r of records) {
+      if (r.status === '审批中') {
+        const dept = (r.dept_name || '未知').trim();
+        const cur = deptMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+        cur.inProgress += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
+        // 审批中的记录也可能已计入 totalBudget，不需要再加一次
+        if (!executionRows.some((er) => er.deptName === dept)) {
+          cur.totalBudget += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
+        }
+        deptMap.set(dept, cur);
+      }
+    }
+  };
+  addPending(productionRecords);
+  addPending(nonProductionRecords);
+
+  // 3. 计算未执行
+  return [...deptMap.values()]
+    .map((item) => {
+      const remainder = Math.max(0, item.totalBudget - item.executed - item.inProgress);
+      return {
+        ...item,
+        unexecuted: remainder,
+        total: item.totalBudget,
+      };
+    })
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+}
+
+/**
  * 汇总统计数据
  */
 export function buildSummaryStats(productionRows, operationRows, executionRows, approvedDetailRows) {

@@ -16,6 +16,7 @@ import {
   buildExecutionRateData,
   buildDeptApprovedComparison,
   buildRegionDistribution,
+  buildExecutionStatus,
   buildSummaryStats,
 } from '../utils/chartHelpers';
 import {
@@ -236,9 +237,10 @@ export default function VisualReport({ onBack }) {
     const execRate = buildExecutionRateData(execRows);
     const deptComp = buildDeptApprovedComparison(execRows);
     const regionDist = buildRegionDistribution(reportData.production || [], reportData.nonProduction || []);
+    const execStatus = buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []);
     const stats = buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows);
 
-    return { deptSummary, trend, typeDist, execRate, deptComp, regionDist, stats };
+    return { deptSummary, trend, typeDist, execRate, deptComp, regionDist, execStatus, stats };
   }, [reportData, startDate, endDate]);
 
   if (loading) {
@@ -271,7 +273,7 @@ export default function VisualReport({ onBack }) {
     );
   }
 
-  const { deptSummary, trend, typeDist, execRate, deptComp, regionDist, stats } = chartData;
+  const { deptSummary, trend, typeDist, execRate, deptComp, regionDist, execStatus, stats } = chartData;
 
   return (
     <div style={styles.page}>
@@ -387,6 +389,23 @@ export default function VisualReport({ onBack }) {
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
               </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 预算执行状态分布 - 横向堆叠条形图 */}
+          <div style={styles.chartCard}>
+            <h3 style={styles.chartTitle}>预算执行状态分布（Top 10）</h3>
+            <ResponsiveContainer width="100%" height={Math.max(280, execStatus.length * 48)}>
+              <BarChart data={execStatus} layout="vertical" margin={{ top: 5, right: 20, left: 80, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis type="number" tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
+                <YAxis type="category" dataKey="deptName" tick={{ fontSize: 12, fill: '#374151' }} tickFormatter={(v) => truncateLabel(v, 10)} width={75} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend />
+                <Bar dataKey="executed" name="已执行" fill="#52c41a" barSize={20} stackId="a" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="inProgress" name="审批中" fill="#faad14" barSize={20} stackId="a" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="unexecuted" name="未执行" fill="#d9d9d9" barSize={20} stackId="a" radius={[0, 4, 4, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
 

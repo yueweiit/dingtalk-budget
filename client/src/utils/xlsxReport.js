@@ -993,6 +993,51 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ]),
   ];
 
+  // 7. 预算执行状态分布（按部门 Top 10）
+  const execStatusMap = new Map();
+  for (const row of executionRows) {
+    const dept = (row.deptName || '未知').trim();
+    const cur = execStatusMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+    cur.totalBudget += toAmount(row.totalBudget);
+    cur.executed += toAmount(row.totalApproved);
+    execStatusMap.set(dept, cur);
+  }
+  for (const r of production) {
+    if (r.status === '审批中') {
+      const dept = (r.dept_name || '未知').trim();
+      const cur = execStatusMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+      cur.inProgress += toAmount(r.total_amount || r.monthly_budget_amount);
+      execStatusMap.set(dept, cur);
+    }
+  }
+  for (const r of nonProduction) {
+    if (r.status === '审批中') {
+      const dept = (r.dept_name || '未知').trim();
+      const cur = execStatusMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+      cur.inProgress += toAmount(r.total_amount || r.budget_amount);
+      execStatusMap.set(dept, cur);
+    }
+  }
+  const execStatusRows = [...execStatusMap.values()]
+    .map((item) => ({
+      ...item,
+      unexecuted: Math.max(0, item.totalBudget - item.executed - item.inProgress),
+    }))
+    .sort((a, b) => (b.totalBudget) - (a.totalBudget))
+    .slice(0, 10);
+
+  const execStatusSheetRows = [
+    ['序号', '所属部门', '预算总额', '已执行', '审批中', '未执行'],
+    ...execStatusRows.map((r, i) => [
+      i + 1,
+      r.deptName,
+      r.totalBudget.toFixed(2),
+      r.executed.toFixed(2),
+      r.inProgress.toFixed(2),
+      r.unexecuted.toFixed(2),
+    ]),
+  ];
+
   const deptCompSheetRows = [
     ['序号', '所属部门', '预算月份', '预算金额', '已审批支出', '剩余额度'],
     ...deptCompRows.map((r, i) => [
@@ -1026,6 +1071,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '预算执行', rows: executionSheetRows, widths: [8, 28, 14, 16, 18, 16, 18, 18, 18, 18, 14, 16, 16] },
     { name: '部门预算分布', rows: deptBudgetSheetRows, widths: [8, 28, 18, 18, 18] },
     { name: '地区预算分布', rows: regionSheetRows, widths: [8, 14, 18, 18, 18] },
+    { name: '执行状态分布', rows: execStatusSheetRows, widths: [8, 28, 18, 18, 18, 18] },
     { name: '月度预算趋势', rows: trendSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '预算类型占比', rows: typeDistributionSheetRows, widths: [18, 18, 14] },
     { name: '部门执行率', rows: execRateSheetRows, widths: [8, 28, 14, 18, 18, 18, 12] },
