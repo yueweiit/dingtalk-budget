@@ -488,7 +488,7 @@ export default function BudgetList({ onGoToVisual }) {
                       <th style={styles.th}>状态</th>
                       <th style={styles.th}>预算金额（元）</th>
                       <th style={styles.th}>创建时间</th>
-                      <th style={styles.th}>操作</th>
+                      <th style={{ ...styles.th, minWidth: 160 }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -509,9 +509,21 @@ export default function BudgetList({ onGoToVisual }) {
                           {item.status === '已通过' ? Number(item.total_amount || 0).toFixed(2) : '-'}
                         </td>
                         <td style={styles.td}>{formatDateTime(item.create_time)}</td>
-                        <td style={styles.td}>
+                        <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
                           <button style={styles.detailButton} onClick={() => handleOpenDetail(item)}>
                             详情
+                          </button>
+                          <button
+                            style={{ ...styles.detailButton, marginLeft: 6, borderColor: '#d1d5db', color: '#6b7280' }}
+                            onClick={() => {
+                              const instId = item.process_instance_id;
+                              if (!instId) return;
+                              const pcUrl = `https://aflow.dingtalk.com/dingtalk/mobile/homepage.htm?showmenu=false&dd_progress=false#/approval?procInstId=${instId}`;
+                              const magicLink = `dingtalk://dingtalkclient/page/link?url=${encodeURIComponent(pcUrl)}&pc_slide=true`;
+                              window.open(magicLink, '_blank');
+                            }}
+                          >
+                            钉钉原单
                           </button>
                         </td>
                       </tr>
