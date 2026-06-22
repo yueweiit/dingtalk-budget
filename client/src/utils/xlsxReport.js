@@ -957,6 +957,42 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ]),
   ];
 
+  // 6. 地区预算分布
+  const normalizeRegion = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return '未指定';
+    if (text.includes('中国') || text.toLowerCase().includes('china')) return '中国';
+    if (text.includes('墨西哥') || text.toLowerCase().includes('méxico') || text.toLowerCase().includes('mexico')) return '墨西哥';
+    return text;
+  };
+  const regionMap = new Map();
+  for (const r of production) {
+    const region = normalizeRegion(r.execution_region);
+    const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
+    cur.production += toAmount(r.total_amount || r.monthly_budget_amount);
+    regionMap.set(region, cur);
+  }
+  for (const r of nonProduction) {
+    const region = normalizeRegion(r.execution_region);
+    const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
+    cur.nonProduction += toAmount(r.total_amount || r.budget_amount);
+    regionMap.set(region, cur);
+  }
+  const regionRows = [...regionMap.values()]
+    .map((item) => ({ ...item, total: item.production + item.nonProduction }))
+    .sort((a, b) => b.total - a.total);
+
+  const regionSheetRows = [
+    ['序号', '执行地区', '生产预算金额', '非生产预算金额', '预算合计'],
+    ...regionRows.map((r, i) => [
+      i + 1,
+      r.region,
+      r.production.toFixed(2),
+      r.nonProduction.toFixed(2),
+      r.total.toFixed(2),
+    ]),
+  ];
+
   const deptCompSheetRows = [
     ['序号', '所属部门', '预算月份', '预算金额', '已审批支出', '剩余额度'],
     ...deptCompRows.map((r, i) => [
@@ -989,6 +1025,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '汇总', rows: summarySheetRows, widths: [28, 18] },
     { name: '预算执行', rows: executionSheetRows, widths: [8, 28, 14, 16, 18, 16, 18, 18, 18, 18, 14, 16, 16] },
     { name: '部门预算分布', rows: deptBudgetSheetRows, widths: [8, 28, 18, 18, 18] },
+    { name: '地区预算分布', rows: regionSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '月度预算趋势', rows: trendSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '预算类型占比', rows: typeDistributionSheetRows, widths: [18, 18, 14] },
     { name: '部门执行率', rows: execRateSheetRows, widths: [8, 28, 14, 18, 18, 18, 12] },

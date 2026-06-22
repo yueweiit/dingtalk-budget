@@ -102,6 +102,41 @@ export function buildDeptApprovedComparison(executionRows) {
 }
 
 /**
+ * 按执行地区汇总预算金额，用于横向条形图
+ * 返回格式: [{ region, production, nonProduction, total }]
+ */
+export function buildRegionDistribution(productionRecords, nonProductionRecords) {
+  const regionMap = new Map();
+
+  const normalizeRegion = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return '未指定';
+    // 统一常见写法
+    if (text.includes('中国') || text.toLowerCase().includes('china')) return '中国';
+    if (text.includes('墨西哥') || text.toLowerCase().includes('méxico') || text.toLowerCase().includes('mexico')) return '墨西哥';
+    return text;
+  };
+
+  for (const record of productionRecords) {
+    const region = normalizeRegion(record.execution_region);
+    const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
+    cur.production += toAmount(record.total_amount || record.monthly_budget_amount);
+    regionMap.set(region, cur);
+  }
+
+  for (const record of nonProductionRecords) {
+    const region = normalizeRegion(record.execution_region);
+    const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
+    cur.nonProduction += toAmount(record.total_amount || record.budget_amount);
+    regionMap.set(region, cur);
+  }
+
+  return [...regionMap.values()]
+    .map((item) => ({ ...item, total: item.production + item.nonProduction }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/**
  * 汇总统计数据
  */
 export function buildSummaryStats(productionRows, operationRows, executionRows, approvedDetailRows) {

@@ -486,6 +486,7 @@ export default function BudgetList({ onGoToVisual }) {
                       <th style={styles.th}>预算月份</th>
                       <th style={styles.th}>执行地区</th>
                       <th style={styles.th}>状态</th>
+                      <th style={styles.th}>预算金额（元）</th>
                       <th style={styles.th}>创建时间</th>
                       <th style={styles.th}>操作</th>
                     </tr>
@@ -503,6 +504,9 @@ export default function BudgetList({ onGoToVisual }) {
                           <span style={{ ...styles.status, ...getStatusStyle(item.status) }}>
                             {displayValue(item.status)}
                           </span>
+                        </td>
+                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
+                          {item.status === '已通过' ? Number(item.total_amount || 0).toFixed(2) : '-'}
                         </td>
                         <td style={styles.td}>{formatDateTime(item.create_time)}</td>
                         <td style={styles.td}>

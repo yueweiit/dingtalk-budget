@@ -15,6 +15,7 @@ import {
   buildBudgetTypeDistribution,
   buildExecutionRateData,
   buildDeptApprovedComparison,
+  buildRegionDistribution,
   buildSummaryStats,
 } from '../utils/chartHelpers';
 import {
@@ -234,9 +235,10 @@ export default function VisualReport({ onBack }) {
     const typeDist = buildBudgetTypeDistribution(productionRows, operationRows);
     const execRate = buildExecutionRateData(execRows);
     const deptComp = buildDeptApprovedComparison(execRows);
+    const regionDist = buildRegionDistribution(reportData.production || [], reportData.nonProduction || []);
     const stats = buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows);
 
-    return { deptSummary, trend, typeDist, execRate, deptComp, stats };
+    return { deptSummary, trend, typeDist, execRate, deptComp, regionDist, stats };
   }, [reportData, startDate, endDate]);
 
   if (loading) {
@@ -269,7 +271,7 @@ export default function VisualReport({ onBack }) {
     );
   }
 
-  const { deptSummary, trend, typeDist, execRate, deptComp, stats } = chartData;
+  const { deptSummary, trend, typeDist, execRate, deptComp, regionDist, stats } = chartData;
 
   return (
     <div style={styles.page}>
@@ -343,6 +345,22 @@ export default function VisualReport({ onBack }) {
                 <Legend />
                 <Bar dataKey="production" name="生产预算" fill={CHART_BLUE} radius={[4, 4, 0, 0]} />
                 <Bar dataKey="nonProduction" name="非生产预算" fill={CHART_TEAL} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 地区预算分布 - 横向条形图 */}
+          <div style={styles.chartCard}>
+            <h3 style={styles.chartTitle}>地区预算分布</h3>
+            <ResponsiveContainer width="100%" height={Math.max(200, regionDist.length * 52)}>
+              <BarChart data={regionDist} layout="vertical" margin={{ top: 5, right: 30, left: 80, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis type="number" tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
+                <YAxis type="category" dataKey="region" tick={{ fontSize: 13, fill: '#374151' }} width={70} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend />
+                <Bar dataKey="production" name="生产预算" fill={CHART_BLUE} radius={[0, 4, 4, 0]} barSize={24} />
+                <Bar dataKey="nonProduction" name="非生产预算" fill={CHART_TEAL} radius={[0, 4, 4, 0]} barSize={24} />
               </BarChart>
             </ResponsiveContainer>
           </div>
