@@ -233,7 +233,15 @@ function parseBaseBudget(dingtalkData, budgetType) {
   const formValues = dingtalkData.formComponentValues || [];
   const budgetMonth = getFormValue(formValues, ['预算月份', 'Mes presupuestario', '填报月份', 'Mes de declaración']);
   const applicationDate = getFormValue(formValues, ['申请日期', 'Fecha de solicitud', '填报日期', 'Fecha de llenado']);
-  const totalAmount = toNumber(getFormValue(formValues, ['预算总金额', 'Presupuesto Total', 'RMB']));
+  // 诊断：打印所有表单字段名，便于排查金额提取问题
+  const amountKeywords = ['预算总金额', 'Presupuesto Total', 'RMB', '总金额', '预算金额', '金额', 'Total', 'Monto total'];
+  const rawAmountValue = getFormValue(formValues, amountKeywords);
+  const totalAmount = toNumber(rawAmountValue);
+  if (totalAmount === 0) {
+    const fieldNames = formValues.map((f) => f.name || '').filter(Boolean);
+    console.log(`[PARSER:DIAG] form_no=${dingtalkData.businessId}, amountKeywords tried=${JSON.stringify(amountKeywords)}, rawValue=${JSON.stringify(rawAmountValue)}, totalAmount=${totalAmount}`);
+    console.log(`[PARSER:DIAG] Available field names: ${JSON.stringify(fieldNames)}`);
+  }
 
   return {
     form_no: dingtalkData.businessId,

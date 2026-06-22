@@ -1,3 +1,10 @@
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: join(__dirname, '..', '.env') });
+
 import { pool } from '../db/index.js';
 import { syncDingtalkData, syncDingtalkInstance } from '../routes/sync.js';
 
@@ -30,15 +37,17 @@ function printHelp() {
 Usage:
   npm run sync:dingtalk
   npm run sync:dingtalk -- --days 90
+  npm run sync:dingtalk -- --days 90 --update-existing
   npm run sync:dingtalk -- --start 2026-06-01 --end 2026-06-03
   npm run sync:dingtalk -- --instance <processInstanceId>
 
 Options:
-  --days <n>       Sync the last n days. Default: 30.
-  --start <date>   Start date/time. Supports YYYY-MM-DD, ISO string, or millisecond timestamp.
-  --end <date>     End date/time. Supports YYYY-MM-DD, ISO string, or millisecond timestamp.
-  --instance <id>  Sync one DingTalk process instance by ID.
-  --help           Show this help.
+  --days <n>           Sync the last n days. Default: 30.
+  --start <date>       Start date/time. Supports YYYY-MM-DD, ISO string, or millisecond timestamp.
+  --end <date>         End date/time. Supports YYYY-MM-DD, ISO string, or millisecond timestamp.
+  --instance <id>      Sync one DingTalk process instance by ID.
+  --update-existing    更新已存在的记录（用于回填 total_amount 等新字段）
+  --help               Show this help.
 `);
 }
 
@@ -93,8 +102,9 @@ async function main() {
     throw new Error('--end must be greater than or equal to --start');
   }
 
-  console.log(`[SCRIPT] Syncing DingTalk data: ${new Date(startTime).toISOString()} ~ ${new Date(endTime).toISOString()}`);
-  const result = await syncDingtalkData(startTime, endTime);
+  const updateExisting = Boolean(args['update-existing']);
+  console.log(`[SCRIPT] Syncing DingTalk data: ${new Date(startTime).toISOString()} ~ ${new Date(endTime).toISOString()}, updateExisting=${updateExisting}`);
+  const result = await syncDingtalkData(startTime, endTime, { updateExisting });
   console.log('[SCRIPT] Sync result:', JSON.stringify(result, null, 2));
 }
 
