@@ -1,46 +1,48 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import DateFilter from '../components/DateFilter';
 import { getReportData } from '../api';
 import {
+  buildApprovedDetailRows,
+  buildExecutionRows,
   buildOperationRows,
   buildProductionRows,
-  buildExecutionRows,
-  buildApprovedDetailRows,
   formatMonth,
 } from '../utils/xlsxReport';
 import {
-  buildDeptBudgetSummary,
   buildBudgetTrend,
   buildBudgetTypeDistribution,
-  buildExecutionRateData,
   buildDeptApprovedComparison,
+  buildDeptBudgetSummary,
+  buildExecutionRateData,
   buildExecutionStatus,
   buildSummaryStats,
 } from '../utils/chartHelpers';
-import { buildRegionChartRows } from '../utils/regionChartRows';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell, LineChart, Line,
-} from 'recharts';
+import { buildRegionChartRows2 } from '../utils/regionChartRows2';
 
 const COLORS = ['#2563eb', '#0f766e', '#b45309', '#7c3aed', '#db2777', '#0891b2'];
-
 const CHART_BLUE = '#2563eb';
 const CHART_TEAL = '#0f766e';
 const CHART_AMBER = '#b45309';
 
 const styles = {
-  page: {
-    minHeight: '100vh',
-    background: '#f3f4f6',
-    color: '#111827',
-  },
-  container: {
-    padding: '24px',
-    maxWidth: '1440px',
-    margin: '0 auto',
-  },
+  page: { minHeight: '100vh', background: '#f3f4f6', color: '#111827' },
+  container: { padding: '24px', maxWidth: '1440px', margin: '0 auto' },
   header: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -49,17 +51,8 @@ const styles = {
     gap: '16px',
     marginBottom: '20px',
   },
-  title: {
-    margin: 0,
-    fontSize: '26px',
-    fontWeight: 700,
-    color: '#111827',
-  },
-  subtitle: {
-    margin: '8px 0 0',
-    fontSize: '14px',
-    color: '#6b7280',
-  },
+  title: { margin: 0, fontSize: '26px', fontWeight: 700, color: '#111827' },
+  subtitle: { margin: '8px 0 0', fontSize: '14px', color: '#6b7280' },
   toolbar: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -94,17 +87,8 @@ const styles = {
     border: '1px solid #e5e7eb',
     boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
   },
-  statValue: {
-    fontSize: '26px',
-    lineHeight: 1.1,
-    fontWeight: 700,
-    color: '#2563eb',
-  },
-  statLabel: {
-    fontSize: '13px',
-    color: '#6b7280',
-    marginTop: '8px',
-  },
+  statValue: { fontSize: '26px', lineHeight: 1.1, fontWeight: 700, color: '#2563eb' },
+  statLabel: { fontSize: '13px', color: '#6b7280', marginTop: '8px' },
   chartGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(500px, 1fr))',
@@ -125,25 +109,28 @@ const styles = {
     boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
     gridColumn: '1 / -1',
   },
-  chartTitle: {
-    margin: '0 0 16px',
-    fontSize: '16px',
-    fontWeight: 600,
-    color: '#374151',
-  },
-  empty: {
-    textAlign: 'center',
-    padding: '56px 16px',
-    color: '#6b7280',
-    fontSize: '14px',
-  },
-  loading: {
-    textAlign: 'center',
-    padding: '56px 16px',
-    color: '#6b7280',
-    fontSize: '14px',
-  },
+  chartTitle: { margin: '0 0 16px', fontSize: '16px', fontWeight: 600, color: '#374151' },
+  empty: { textAlign: 'center', padding: '56px 16px', color: '#6b7280', fontSize: '14px' },
+  loading: { textAlign: 'center', padding: '56px 16px', color: '#6b7280', fontSize: '14px' },
 };
+
+const formatCurrency = (value) => {
+  if (value === null || value === undefined) return '0';
+  const num = Number(value);
+  if (num >= 10000) return `${(num / 10000).toFixed(1)}万`;
+  return num.toLocaleString();
+};
+
+const truncateLabel = (label, maxLen = 10) => {
+  if (!label || label.length <= maxLen) return label;
+  return `${String(label).slice(0, maxLen)}...`;
+};
+
+function resolveReportMonth(startDate, endDate) {
+  const startMonth = formatMonth(startDate);
+  const endMonth = formatMonth(endDate);
+  return startMonth && startMonth === endMonth ? startMonth : '';
+}
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload || !payload.length) return null;
@@ -159,36 +146,14 @@ const CustomTooltip = ({ active, payload, label }) => {
       <p style={{ margin: '0 0 4px', fontWeight: 600, color: '#374151' }}>{label}</p>
       {payload.map((entry, index) => (
         <p key={index} style={{ margin: 0, color: entry.color }}>
-          {entry.name}: {typeof entry.value === 'number' ? entry.value.toLocaleString() : entry.value}
+          {entry.name}: {typeof entry.value === 'number' ? formatCurrency(entry.value) : entry.value}
         </p>
       ))}
     </div>
   );
 };
 
-const formatCurrency = (value) => {
-  if (value === null || value === undefined) return '0';
-  const num = Number(value);
-  if (num >= 10000) {
-    return (num / 10000).toFixed(1) + '万';
-  }
-  return num.toLocaleString();
-};
-
-/** X 轴标签过长时截断 */
-const truncateLabel = (label, maxLen = 10) => {
-  if (!label || label.length <= maxLen) return label;
-  return String(label).slice(0, maxLen) + '…';
-};
-
-/** 计算报表月份 */
-function resolveReportMonth(startDate, endDate) {
-  const s = formatMonth(startDate);
-  const e = formatMonth(endDate);
-  return s && s === e ? s : '';
-}
-
-export default function VisualReport({ onBack }) {
+export default function VisualReportInitial({ onBack }) {
   const [startDate, setStartDate] = useState(dayjs().subtract(30, 'day').format('YYYY-MM-DD'));
   const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [reportData, setReportData] = useState(null);
@@ -231,51 +196,21 @@ export default function VisualReport({ onBack }) {
       reportMonth,
     });
 
-    const deptSummary = buildDeptBudgetSummary(productionRows, operationRows);
-    const trend = buildBudgetTrend(productionRows, operationRows);
-    const typeDist = buildBudgetTypeDistribution(productionRows, operationRows);
-    const execRate = buildExecutionRateData(execRows);
-    const deptComp = buildDeptApprovedComparison(execRows);
-    const regionDist = buildRegionChartRows(
-      reportData.production || [],
-      reportData.nonProduction || [],
-      approvedDetailRows,
-    );
-    const execStatus = buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []);
-    const stats = buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows);
-
-    return { deptSummary, trend, typeDist, execRate, deptComp, regionDist, execStatus, stats };
+    return {
+      deptSummary: buildDeptBudgetSummary(productionRows, operationRows),
+      trend: buildBudgetTrend(productionRows, operationRows),
+      typeDist: buildBudgetTypeDistribution(productionRows, operationRows),
+      execRate: buildExecutionRateData(execRows),
+      deptComp: buildDeptApprovedComparison(execRows),
+      regionDist: buildRegionChartRows2(reportData.production || [], reportData.nonProduction || [], approvedDetailRows),
+      execStatus: buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []),
+      stats: buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows),
+    };
   }, [reportData, startDate, endDate]);
 
-  if (loading) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.container}>
-          <div style={styles.loading}>数据加载中...</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (errorMessage) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.container}>
-          <div style={styles.empty}>{errorMessage}</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!chartData) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.container}>
-          <div style={styles.empty}>暂无报表数据</div>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <div style={styles.loading}>数据加载中...</div>;
+  if (errorMessage) return <div style={styles.empty}>{errorMessage}</div>;
+  if (!chartData) return <div style={styles.empty}>暂无报表数据</div>;
 
   const { deptSummary, trend, typeDist, execRate, deptComp, regionDist, execStatus, stats } = chartData;
 
@@ -285,13 +220,11 @@ export default function VisualReport({ onBack }) {
         <div style={styles.header}>
           <div>
             <h1 style={styles.title}>可视化报表</h1>
-            <p style={styles.subtitle}>
-              当前筛选：{startDate || '不限'} 至 {endDate || '不限'}
-            </p>
+            <p style={styles.subtitle}>当前筛选：{startDate || '不限'} 至 {endDate || '不限'}</p>
           </div>
           {onBack && (
             <button style={styles.refreshButton} onClick={onBack}>
-              ← 返回列表
+              返回列表
             </button>
           )}
         </div>
@@ -309,7 +242,6 @@ export default function VisualReport({ onBack }) {
           </button>
         </div>
 
-        {/* 汇总统计卡片 */}
         <div style={styles.statsRow}>
           <div style={styles.statCard}>
             <div style={styles.statValue}>{stats.productionCount}</div>
@@ -320,15 +252,15 @@ export default function VisualReport({ onBack }) {
             <div style={styles.statLabel}>非生产预算明细数</div>
           </div>
           <div style={styles.statCard}>
-            <div style={{ ...styles.statValue, color: '#0f766e' }}>¥{formatCurrency(stats.productionTotal)}</div>
+            <div style={{ ...styles.statValue, color: CHART_TEAL }}>{formatCurrency(stats.productionTotal)}</div>
             <div style={styles.statLabel}>生产预算总金额</div>
           </div>
           <div style={styles.statCard}>
-            <div style={{ ...styles.statValue, color: '#b45309' }}>¥{formatCurrency(stats.nonProductionTotal)}</div>
+            <div style={{ ...styles.statValue, color: CHART_AMBER }}>{formatCurrency(stats.nonProductionTotal)}</div>
             <div style={styles.statLabel}>非生产预算总金额</div>
           </div>
           <div style={styles.statCard}>
-            <div style={{ ...styles.statValue, color: '#7c3aed' }}>¥{formatCurrency(stats.approvedTotal)}</div>
+            <div style={{ ...styles.statValue, color: '#7c3aed' }}>{formatCurrency(stats.approvedTotal)}</div>
             <div style={styles.statLabel}>已审批支出合计</div>
           </div>
           <div style={styles.statCard}>
@@ -337,9 +269,7 @@ export default function VisualReport({ onBack }) {
           </div>
         </div>
 
-        {/* 图表网格 */}
         <div style={styles.chartGrid}>
-          {/* 各部门预算分布 - 柱状图 */}
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>各部门预算分布（Top 12）</h3>
             <ResponsiveContainer width="100%" height={360}>
@@ -348,13 +278,13 @@ export default function VisualReport({ onBack }) {
                 <XAxis dataKey="deptName" tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={(v) => truncateLabel(v, 8)} angle={-35} textAnchor="end" height={70} />
                 <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
                 <Tooltip content={<CustomTooltip />} />
+                <Legend />
                 <Bar dataKey="production" name="生产预算" fill={CHART_BLUE} radius={[4, 4, 0, 0]} />
                 <Bar dataKey="nonProduction" name="非生产预算" fill={CHART_TEAL} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          {/* 地区预算分布 - 横向条形图 */}
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>地区预算分布</h3>
             <ResponsiveContainer width="100%" height={Math.max(240, regionDist.length * 58)}>
@@ -363,13 +293,12 @@ export default function VisualReport({ onBack }) {
                 <XAxis type="number" tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
                 <YAxis type="category" dataKey="label" tick={{ fontSize: 13, fill: '#374151' }} width={100} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="production" name="生产预算" fill={CHART_BLUE} radius={[0, 4, 4, 0]} barSize={24} />
-                <Bar dataKey="nonProduction" name="非生产预算" fill={CHART_TEAL} radius={[0, 4, 4, 0]} barSize={24} />
+                <Bar dataKey="production" name="预算" fill={CHART_TEAL} radius={[0, 4, 4, 0]} barSize={22} />
+                <Bar dataKey="nonProduction" name="支出" fill={CHART_BLUE} radius={[0, 4, 4, 0]} barSize={22} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          {/* 预算类型占比 - 饼图 */}
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>预算类型占比</h3>
             <ResponsiveContainer width="100%" height={360}>
@@ -385,7 +314,7 @@ export default function VisualReport({ onBack }) {
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`}
                 >
                   {typeDist.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    <Cell key={`pie-cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip content={<CustomTooltip />} />
@@ -394,7 +323,6 @@ export default function VisualReport({ onBack }) {
             </ResponsiveContainer>
           </div>
 
-          {/* 预算执行状态分布 - 横向堆叠条形图 */}
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>预算执行状态分布（Top 10）</h3>
             <ResponsiveContainer width="100%" height={Math.max(280, execStatus.length * 48)}>
@@ -404,14 +332,13 @@ export default function VisualReport({ onBack }) {
                 <YAxis type="category" dataKey="deptName" tick={{ fontSize: 12, fill: '#374151' }} tickFormatter={(v) => truncateLabel(v, 10)} width={75} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                <Bar dataKey="executed" name="已执行" fill="#52c41a" barSize={20} stackId="a" radius={[0, 0, 0, 0]} />
-                <Bar dataKey="inProgress" name="审批中" fill="#faad14" barSize={20} stackId="a" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="executed" name="已执行" fill="#52c41a" barSize={20} stackId="a" />
+                <Bar dataKey="inProgress" name="审批中" fill="#faad14" barSize={20} stackId="a" />
                 <Bar dataKey="unexecuted" name="未执行" fill="#d9d9d9" barSize={20} stackId="a" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          {/* 月度预算趋势 - 折线图 */}
           <div style={styles.chartFull}>
             <h3 style={styles.chartTitle}>月度预算趋势</h3>
             <ResponsiveContainer width="100%" height={360}>
@@ -428,7 +355,6 @@ export default function VisualReport({ onBack }) {
             </ResponsiveContainer>
           </div>
 
-          {/* 各部门执行率 - 横向柱状图 */}
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>各部门执行率（Top 10）</h3>
             <ResponsiveContainer width="100%" height={360}>
@@ -441,14 +367,13 @@ export default function VisualReport({ onBack }) {
                   {execRate.map((entry, index) => {
                     const rate = entry.executionRate || 0;
                     const color = rate >= 100 ? '#dc2626' : rate >= 80 ? CHART_AMBER : CHART_TEAL;
-                    return <Cell key={`cell-${index}`} fill={color} />;
+                    return <Cell key={`rate-cell-${index}`} fill={color} />;
                   })}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
 
-          {/* 部门预算 vs 已审批对比 - 分组柱状图 */}
           <div style={styles.chartCard}>
             <h3 style={styles.chartTitle}>部门预算 vs 已审批支出（Top 10）</h3>
             <ResponsiveContainer width="100%" height={360}>

@@ -1,10 +1,12 @@
 import express from 'express';
 import axios from 'axios';
+import pg from 'pg';
 import { query } from '../db/index.js';
 import { retry, createCircuitBreaker } from '../utils/resilience.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
+const { Client } = pg;
 const isProduction = process.env.NODE_ENV === 'production';
 const YUNYING_API_BASE = process.env.YUNYING_API_BASE || 'http://localhost:3002';
 const YUNYING_TIMEOUT_MS = Number(process.env.YUNYING_TIMEOUT_MS || 15000);
@@ -62,6 +64,11 @@ function approvedDetailMonth(item) {
   return formatMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
 }
 
+function isApprovedExpenseItem(item) {
+  const approvalStatus = String(item?.approval_status || '').toUpperCase();
+  return approvalStatus === 'COMPLETED' || Boolean(item?.approval_completed_at);
+}
+
 function summarizeApprovedDetails(details) {
   const grouped = new Map();
 
@@ -116,8 +123,10 @@ async function fetchApprovedExpenseSummary(dateRange) {
       ]), { label: 'yunying-approved' })
     );
 
-    const operationItems = Array.isArray(operation.data?.items) ? operation.data.items : [];
-    const purchaseItems = Array.isArray(purchase.data?.items) ? purchase.data.items : [];
+    const operationItems = (Array.isArray(operation.data?.items) ? operation.data.items : [])
+      .filter(isApprovedExpenseItem);
+    const purchaseItems = (Array.isArray(purchase.data?.items) ? purchase.data.items : [])
+      .filter(isApprovedExpenseItem);
 
     for (const item of operationItems) {
       const queryMonth = approvedDetailMonth(item);
@@ -373,59 +382,84 @@ router.get('/report', async (req, res) => {
       paramIndex++;
     }
 
-    const productionResult = await query(`
-      SELECT p.*,
-        COALESCE((
-          SELECT json_agg(row_to_json(x))
-          FROM (
-            SELECT * FROM budget_material WHERE form_no = p.form_no ORDER BY id
-          ) x
-        ), '[]'::json) AS material_items,
-        COALESCE((
-          SELECT json_agg(row_to_json(x))
-          FROM (
-            SELECT * FROM budget_production WHERE form_no = p.form_no ORDER BY id
-          ) x
-        ), '[]'::json) AS production_items,
-        COALESCE((
-          SELECT json_agg(row_to_json(x))
-          FROM (
-            SELECT * FROM budget_labor WHERE form_no = p.form_no ORDER BY id
-          ) x
-        ), '[]'::json) AS labor_items
-      FROM production_budget p
-      ${whereClause}
-      ORDER BY p.create_time DESC
-    `, params);
+    const exportClient = new Client({
+      host: process.env.PGHOST,
+      port: Number(process.env.PGPORT || 5432),
+      database: process.env.PGDATABASE,
+      user: process.env.PGUSER,
+      password: process.env.PGPASSWORD,
+      connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 2000),
+    });
+    await exportClient.connect();
 
-    const nonProductionResult = await query(`
-      SELECT n.*,
-        COALESCE((
-          SELECT json_agg(row_to_json(x))
-          FROM (
-            SELECT * FROM budget_hr WHERE form_no = n.form_no ORDER BY id
-          ) x
-        ), '[]'::json) AS hr_items,
-        COALESCE((
-          SELECT json_agg(row_to_json(x))
-          FROM (
-            SELECT * FROM budget_office WHERE form_no = n.form_no ORDER BY id
-          ) x
-        ), '[]'::json) AS office_items,
-        COALESCE((
-          SELECT json_agg(row_to_json(x))
-          FROM (
-            SELECT * FROM budget_operation WHERE form_no = n.form_no ORDER BY id
-          ) x
-        ), '[]'::json) AS operation_items
-      FROM non_production_budget n
-      ${whereClause}
-      ORDER BY n.create_time DESC
-    `, params);
+    let productionResult;
+    let nonProductionResult;
+    try {
+      productionResult = await exportClient.query(`
+        SELECT
+          p.form_no, p.process_instance_id, p.dept_name, p.budget_type, p.declaration_month,
+          p.budget_month, p.application_date, p.execution_region, p.monthly_budget_amount,
+          p.total_amount, p.creator_name, p.creator_userid, p.create_time, p.status, p.remark,
+          p.tenant_id,
+          COALESCE((
+            SELECT json_agg(row_to_json(x))
+            FROM (
+              SELECT * FROM budget_material WHERE form_no = p.form_no ORDER BY id
+            ) x
+          ), '[]'::json) AS material_items,
+          COALESCE((
+            SELECT json_agg(row_to_json(x))
+            FROM (
+              SELECT * FROM budget_production WHERE form_no = p.form_no ORDER BY id
+            ) x
+          ), '[]'::json) AS production_items,
+          COALESCE((
+            SELECT json_agg(row_to_json(x))
+            FROM (
+              SELECT * FROM budget_labor WHERE form_no = p.form_no ORDER BY id
+            ) x
+          ), '[]'::json) AS labor_items
+        FROM production_budget p
+        ${whereClause}
+        ORDER BY p.create_time DESC
+      `, params);
+
+      nonProductionResult = await exportClient.query(`
+        SELECT
+          n.form_no, n.process_instance_id, n.dept_name, n.budget_type, n.declaration_month,
+          n.budget_month, n.application_date, n.execution_region, n.creator_name, n.creator_userid,
+          n.create_time, n.status, n.budget_amount, n.total_amount, n.remark, n.tenant_id,
+          COALESCE((
+            SELECT json_agg(row_to_json(x))
+            FROM (
+              SELECT * FROM budget_hr WHERE form_no = n.form_no ORDER BY id
+            ) x
+          ), '[]'::json) AS hr_items,
+          COALESCE((
+            SELECT json_agg(row_to_json(x))
+            FROM (
+              SELECT * FROM budget_office WHERE form_no = n.form_no ORDER BY id
+            ) x
+          ), '[]'::json) AS office_items,
+          COALESCE((
+            SELECT json_agg(row_to_json(x))
+            FROM (
+              SELECT * FROM budget_operation WHERE form_no = n.form_no ORDER BY id
+            ) x
+          ), '[]'::json) AS operation_items
+        FROM non_production_budget n
+        ${whereClause}
+        ORDER BY n.create_time DESC
+      `, params);
+    } finally {
+      await exportClient.end();
+    }
 
     const responseData = {
       production: productionResult.rows,
       nonProduction: nonProductionResult.rows,
+      reportStartDate: startDate || '',
+      reportEndDate: endDate || '',
     };
 
     let warnings = [];

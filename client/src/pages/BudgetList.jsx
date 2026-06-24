@@ -362,7 +362,11 @@ export default function BudgetList({ onGoToVisual }) {
     setExporting(true);
     try {
       const result = await getReportData({ startDate, endDate, includeApproved: 1 });
-      const workbook = createBudgetReportWorkbook(result.data || {});
+      const workbook = createBudgetReportWorkbook({
+        ...(result.data || {}),
+        reportStartDate: startDate,
+        reportEndDate: endDate,
+      });
       const filename = `预算报表_${startDate || '开始'}_${endDate || '结束'}.xlsx`;
       saveWorkbook(workbook, filename);
     } catch (error) {

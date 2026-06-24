@@ -33,24 +33,66 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
  * 返回格式: [{ month, production, nonProduction, total }]
  */
 export function buildBudgetTrend(productionRows, operationRows) {
+  const approvedDetailRows = arguments[2] || [];
+  const options = arguments[3] || {};
+  const trendYear = String(options.year || '').trim();
+
+  const createMonthRow = (month) => ({
+    month,
+    monthLabel: month.includes('-') ? `${Number(month.split('-')[1])}月` : month,
+    production: 0,
+    nonProduction: 0,
+    total: 0,
+    actualExpense: 0,
+  });
+
   const monthMap = new Map();
+  const ensureMonth = (month) => {
+    if (!monthMap.has(month)) {
+      monthMap.set(month, createMonthRow(month));
+    }
+    return monthMap.get(month);
+  };
+
+  if (trendYear && /^\d{4}$/.test(trendYear)) {
+    for (let index = 1; index <= 12; index += 1) {
+      const month = `${trendYear}-${String(index).padStart(2, '0')}`;
+      ensureMonth(month);
+    }
+  }
+
+  const shouldIncludeMonth = (month) => {
+    if (!month || month === '未知') return false;
+    if (!trendYear) return true;
+    return month.startsWith(`${trendYear}-`);
+  };
 
   for (const row of productionRows) {
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
-    const current = monthMap.get(month) || { month, production: 0, nonProduction: 0 };
+    if (!shouldIncludeMonth(month)) continue;
+    const current = ensureMonth(month);
     current.production += toAmount(row.requestAmount);
-    monthMap.set(month, current);
   }
 
   for (const row of operationRows) {
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
-    const current = monthMap.get(month) || { month, production: 0, nonProduction: 0 };
+    if (!shouldIncludeMonth(month)) continue;
+    const current = ensureMonth(month);
     current.nonProduction += toAmount(row.amount);
-    monthMap.set(month, current);
+  }
+
+  for (const row of approvedDetailRows) {
+    const month = String(row.month || '').trim();
+    if (!shouldIncludeMonth(month)) continue;
+    const current = ensureMonth(month);
+    current.actualExpense += toAmount(row.baseCurrencyAmount || row.amount);
   }
 
   return [...monthMap.values()]
-    .map((item) => ({ ...item, total: item.production + item.nonProduction }))
+    .map((item) => ({
+      ...item,
+      total: item.production + item.nonProduction,
+    }))
     .sort((a, b) => String(a.month).localeCompare(String(b.month)));
 }
 
@@ -110,15 +152,16 @@ export function buildRegionDistribution(productionRecords, nonProductionRecords)
 
   const normalizeRegion = (value) => {
     const text = String(value || '').trim();
-    if (!text) return '未指定';
+    if (!text) return '';
     // 统一常见写法
     if (text.includes('中国') || text.toLowerCase().includes('china')) return '中国';
     if (text.includes('墨西哥') || text.toLowerCase().includes('méxico') || text.toLowerCase().includes('mexico')) return '墨西哥';
-    return text;
+    return '';
   };
 
   for (const record of productionRecords) {
     const region = normalizeRegion(record.execution_region);
+    if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
     cur.production += toAmount(record.total_amount || record.monthly_budget_amount);
     regionMap.set(region, cur);
@@ -126,6 +169,7 @@ export function buildRegionDistribution(productionRecords, nonProductionRecords)
 
   for (const record of nonProductionRecords) {
     const region = normalizeRegion(record.execution_region);
+    if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
     cur.nonProduction += toAmount(record.total_amount || record.budget_amount);
     regionMap.set(region, cur);

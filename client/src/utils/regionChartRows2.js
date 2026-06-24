@@ -2,12 +2,25 @@ import { toAmount } from './xlsxReport';
 
 function normalizeRegionName(value) {
   const text = String(value || '').trim();
-  if (!text) return '未指定';
+  if (!text) return '';
 
   const lower = text.toLowerCase();
-  if (text.includes('中国') || lower.includes('china')) return '中国';
-  if (text.includes('墨西哥') || lower.includes('méxico') || lower.includes('mexico')) return '墨西哥';
-  return text;
+  if (text.includes('中国') || lower.includes('china') || /\bcn\b/i.test(text)) return '中国';
+  if (text.includes('墨西哥') || lower.includes('méxico') || lower.includes('mexico') || /\bmx\b/i.test(text)) return '墨西哥';
+  return '';
+}
+
+function detectExpenseRegionFallback(value) {
+  const explicitRegion = normalizeRegionName(value);
+  if (explicitRegion) return explicitRegion;
+  return '中国';
+}
+
+function normalizeDeptKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s()（）\-_/\\,.;:，。；：]/g, '');
 }
 
 export function buildRegionChartRows2(
@@ -16,24 +29,50 @@ export function buildRegionChartRows2(
   approvedDetailRows = [],
 ) {
   const regionMap = new Map();
-  const formRegionMap = new Map();
+  const deptRegionMap = new Map();
+  const REGION_ORDER = ['中国', '墨西哥'];
 
   const ensureRegion = (regionValue) => {
     const region = normalizeRegionName(regionValue);
+    if (!region) return null;
     if (!regionMap.has(region)) {
-      regionMap.set(region, { label: region, budget: 0, expense: 0 });
+      regionMap.set(region, { label: region, budget: 0, expense: null });
     }
     return regionMap.get(region);
   };
 
   const addBudget = (record, amount) => {
     const current = ensureRegion(record.execution_region);
+    if (!current) return;
     current.budget += toAmount(amount);
 
-    const formNo = String(record.form_no || '').trim();
-    if (formNo) {
-      formRegionMap.set(formNo, current.label);
+    const deptName = String(record.dept_name || '').trim();
+    if (deptName) {
+      deptRegionMap.set(normalizeDeptKey(deptName), current.label);
     }
+  };
+
+  const resolveExpenseRegion = (department) => {
+    const deptKey = normalizeDeptKey(department);
+    if (!deptKey) return '';
+
+    const exact = deptRegionMap.get(deptKey);
+    if (exact) return exact;
+
+    const candidateRegions = new Set();
+    for (const [knownDeptKey, region] of deptRegionMap.entries()) {
+      if (!knownDeptKey) continue;
+      if (knownDeptKey.length < 4 || deptKey.length < 4) continue;
+      if (deptKey.includes(knownDeptKey) || knownDeptKey.includes(deptKey)) {
+        candidateRegions.add(region);
+      }
+    }
+
+    if (candidateRegions.size === 1) {
+      return [...candidateRegions][0];
+    }
+
+    return detectExpenseRegionFallback(department);
   };
 
   for (const record of productionRecords) {
@@ -45,14 +84,15 @@ export function buildRegionChartRows2(
   }
 
   for (const row of approvedDetailRows) {
-    const formNo = String(row.businessId || '').trim();
-    const region = formRegionMap.get(formNo);
+    const region = resolveExpenseRegion(row.department);
     if (!region) continue;
 
     const current = ensureRegion(region);
-    current.expense += toAmount(row.baseCurrencyAmount || row.amount);
+    if (!current) continue;
+    current.expense = (current.expense ?? 0) + toAmount(row.baseCurrencyAmount || row.amount);
   }
 
   return [...regionMap.values()]
-    .sort((a, b) => (b.budget + b.expense) - (a.budget + a.expense));
+    .filter((item) => REGION_ORDER.includes(item.label))
+    .sort((a, b) => REGION_ORDER.indexOf(a.label) - REGION_ORDER.indexOf(b.label));
 }

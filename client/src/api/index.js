@@ -5,8 +5,10 @@ if (import.meta.env.VITE_API_KEY) {
   headers['X-API-Key'] = import.meta.env.VITE_API_KEY;
 }
 
+const baseURL = import.meta.env.VITE_API_BASE_URL || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL,
   timeout: 30000,
   headers,
 });
@@ -43,7 +45,7 @@ export async function getStats() {
 
 // 获取报表导出数据
 export async function getReportData(params) {
-  const response = await api.get('/list/report', { params });
+  const response = await api.get('/list/report', { params, timeout: 180000 });
   return response.data;
 }
 

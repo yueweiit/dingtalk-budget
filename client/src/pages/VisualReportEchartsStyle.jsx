@@ -190,6 +190,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
     const operationRows = buildOperationRows(reportData.nonProduction || []);
     const approvedDetailRows = buildApprovedDetailRows(reportData.approvedExpenseDetails || []);
     const reportMonth = resolveReportMonth(startDate, endDate);
+    const trendYear = dayjs(endDate || startDate || dayjs().format('YYYY-MM-DD')).format('YYYY');
     const execRows = buildExecutionRows({
       productionRows,
       operationRows,
@@ -199,7 +200,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
 
     return {
       deptSummary: buildDeptBudgetSummary(productionRows, operationRows),
-      trend: buildBudgetTrend(productionRows, operationRows),
+      trend: buildBudgetTrend(productionRows, operationRows, approvedDetailRows, { year: trendYear }),
       typeDist: buildBudgetTypeDistribution(productionRows, operationRows),
       execRate: buildExecutionRateData(execRows),
       deptComp: buildDeptApprovedComparison(execRows),
@@ -346,13 +347,14 @@ export default function VisualReportEchartsStyle({ onBack }) {
             <ResponsiveContainer width="100%" height={360}>
               <LineChart data={trend} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#6b7280' }} />
+                <XAxis dataKey="monthLabel" tick={{ fontSize: 12, fill: '#6b7280' }} />
                 <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                <Line type="monotone" dataKey="production" name="生产预算" stroke="#2563eb" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-                <Line type="monotone" dataKey="nonProduction" name="非生产预算" stroke="#0f766e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-                <Line type="monotone" dataKey="total" name="合计" stroke={CHART_AMBER} strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                <Line type="monotone" dataKey="total" name="预算合计" stroke={CHART_AMBER} strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                <Line type="monotone" dataKey="production" name="生产预算" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                <Line type="monotone" dataKey="nonProduction" name="非生产预算" stroke="#0f766e" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                <Line type="monotone" dataKey="actualExpense" name="实际支出" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>

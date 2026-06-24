@@ -960,20 +960,22 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   // 6. 地区预算分布
   const normalizeRegion = (value) => {
     const text = String(value || '').trim();
-    if (!text) return '未指定';
+    if (!text) return '';
     if (text.includes('中国') || text.toLowerCase().includes('china')) return '中国';
     if (text.includes('墨西哥') || text.toLowerCase().includes('méxico') || text.toLowerCase().includes('mexico')) return '墨西哥';
-    return text;
+    return '';
   };
   const regionMap = new Map();
   for (const r of production) {
     const region = normalizeRegion(r.execution_region);
+    if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
     cur.production += toAmount(r.total_amount || r.monthly_budget_amount);
     regionMap.set(region, cur);
   }
   for (const r of nonProduction) {
     const region = normalizeRegion(r.execution_region);
+    if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
     cur.nonProduction += toAmount(r.total_amount || r.budget_amount);
     regionMap.set(region, cur);

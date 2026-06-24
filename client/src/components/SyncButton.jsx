@@ -12,7 +12,9 @@ const styles = {
   button: {
     height: '38px',
     padding: '0 16px',
-    border: '1px solid #059669',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: '#059669',
     borderRadius: '6px',
     fontSize: '14px',
     cursor: 'pointer',
