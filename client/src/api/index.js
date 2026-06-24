@@ -13,7 +13,7 @@ const api = axios.create({
 
 // 同步钉钉数据
 export async function syncData(startTime, endTime) {
-  const response = await api.post('/sync', { startTime, endTime });
+  const response = await api.post('/sync', { startTime, endTime }, { timeout: 180000 });
   return response.data;
 }
 
