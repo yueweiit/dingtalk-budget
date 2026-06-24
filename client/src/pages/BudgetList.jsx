@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import DateFilter from '../components/DateFilter';
-import SyncButton from '../components/SyncButtonClean';
+
 import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
 
@@ -356,11 +356,6 @@ export default function BudgetList({ onGoToVisual }) {
     fetchData();
   };
 
-  const handleSyncComplete = () => {
-    fetchData();
-    fetchStats();
-  };
-
   const handleExport = async () => {
     if (exporting) return;
 
@@ -403,11 +398,7 @@ export default function BudgetList({ onGoToVisual }) {
               当前筛选：{startDate || '不限'} 至 {endDate || '不限'}，{activeTitle} 共 {total} 条
             </p>
           </div>
-          <SyncButton
-            startDate={startDate}
-            endDate={endDate}
-            onSyncComplete={handleSyncComplete}
-          />
+
         </div>
 
         <div style={styles.stats}>
