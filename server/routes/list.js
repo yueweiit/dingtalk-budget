@@ -64,6 +64,11 @@ function approvedDetailMonth(item) {
   return formatMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
 }
 
+function isApprovedExpenseItem(item) {
+  const approvalStatus = String(item?.approval_status || '').toUpperCase();
+  return approvalStatus === 'COMPLETED';
+}
+
 function summarizeApprovedDetails(details) {
   const grouped = new Map();
 
@@ -119,9 +124,9 @@ async function fetchApprovedExpenseSummary(dateRange) {
     );
 
     const operationItems = (Array.isArray(operation.data?.items) ? operation.data.items : [])
-      ;
+      .filter(isApprovedExpenseItem);
     const purchaseItems = (Array.isArray(purchase.data?.items) ? purchase.data.items : [])
-      ;
+      .filter(isApprovedExpenseItem);
 
     for (const item of operationItems) {
       const queryMonth = approvedDetailMonth(item);
