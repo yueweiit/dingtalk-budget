@@ -411,9 +411,9 @@ export default function VisualReport({ onBack }) {
             </ResponsiveContainer>
           </div>
 
-          {/* 月度预算趋势 - 折线图 */}
+          {/* 2026年月度预算趋势 - 折线图 */}
           <div style={styles.chartFull}>
-            <h3 style={styles.chartTitle}>月度预算趋势</h3>
+            <h3 style={styles.chartTitle}>2026年月度预算趋势</h3>
             <ResponsiveContainer width="100%" height={360}>
               <LineChart data={trend} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />

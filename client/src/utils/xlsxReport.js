@@ -863,7 +863,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     .sort((a, b) => (b.production + b.nonProduction) - (a.production + b.nonProduction))
     .slice(0, 12);
 
-  // 2. 月度预算趋势
+  // 2. 2026年月度预算趋势
   const monthTrendMap = new Map();
   for (const row of productionRows) {
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
@@ -1062,7 +1062,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   // Sheet index (1-based) → chart definition
   const chartDefs = [
     { sheetIndex: 3, sheetName: '部门预算分布', chart: barChartXml({ sheetName: '部门预算分布', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }], rowCount: deptBudgetRowCount, title: '各部门预算分布', grouping: 'clustered' }) },
-    { sheetIndex: 4, sheetName: '月度预算趋势', chart: lineChartXml({ sheetName: '月度预算趋势', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }, { col: 'E' }], rowCount: trendRowCount, title: '月度预算趋势' }) },
+    { sheetIndex: 4, sheetName: '2026年月度预算趋势', chart: lineChartXml({ sheetName: '2026年月度预算趋势', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }, { col: 'E' }], rowCount: trendRowCount, title: '2026年月度预算趋势' }) },
     { sheetIndex: 5, sheetName: '预算类型占比', chart: pieChartXml({ sheetName: '预算类型占比', labelCol: 'A', valueCol: 'B', rowCount: 4, title: '预算类型占比' }) },
     { sheetIndex: 6, sheetName: '部门执行率', chart: barChartXml({ sheetName: '部门执行率', labelCol: 'B', series: [{ col: 'G' }], rowCount: execRateRowCount, title: '各部门执行率', grouping: 'clustered', barDir: 'bar' }) },
     { sheetIndex: 7, sheetName: '预算vs已审批', chart: barChartXml({ sheetName: '预算vs已审批', labelCol: 'B', series: [{ col: 'D' }, { col: 'E' }], rowCount: deptCompRowCount, title: '预算 vs 已审批支出', grouping: 'clustered' }) },
@@ -1074,7 +1074,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '部门预算分布', rows: deptBudgetSheetRows, widths: [8, 28, 18, 18, 18] },
     { name: '地区预算分布', rows: regionSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '执行状态分布', rows: execStatusSheetRows, widths: [8, 28, 18, 18, 18, 18] },
-    { name: '月度预算趋势', rows: trendSheetRows, widths: [8, 14, 18, 18, 18] },
+    { name: '2026年月度预算趋势', rows: trendSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '预算类型占比', rows: typeDistributionSheetRows, widths: [18, 18, 14] },
     { name: '部门执行率', rows: execRateSheetRows, widths: [8, 28, 14, 18, 18, 18, 12] },
     { name: '预算vs已审批', rows: deptCompSheetRows, widths: [8, 28, 14, 18, 18, 18] },
