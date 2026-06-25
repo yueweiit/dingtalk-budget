@@ -1,5 +1,60 @@
 import { toAmount, formatMonth } from './xlsxReport';
 
+const normalizeDeptName = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+
+const compactDeptKey = (value) => normalizeDeptName(value)
+  .toLowerCase()
+  .replace(/[\s()（）\-_/\\,.;:，。；：&]/g, '');
+
+const canonicalDeptName = (value) => {
+  const name = normalizeDeptName(value) || '未知';
+  const key = compactDeptKey(name);
+
+  if (key.includes('财务中心') || key.includes('centrodefinanzas')) {
+    return 'FC CN财务中心 Centro de finanzas';
+  }
+
+  if (key.includes('hrmx') || key.includes('mx人力资源')) {
+    return 'HR MX人力资源Recursos humanos';
+  }
+
+  if (key.includes('hrcn') || (key.includes('hr') && key.includes('人力资源') && !key.includes('mx'))) {
+    return 'HR CN人力资源Recursos humanos';
+  }
+
+  return name;
+};
+
+function aggregateExecutionRowsByDept(executionRows) {
+  const deptMap = new Map();
+
+  for (const row of executionRows) {
+    const deptName = canonicalDeptName(row.deptName);
+    const key = compactDeptKey(deptName);
+    const current = deptMap.get(key) || {
+      deptName,
+      budgetTotal: 0,
+      approvedTotal: 0,
+      remaining: 0,
+      operationApproved: 0,
+      purchaseApproved: 0,
+      operationCount: 0,
+      purchaseCount: 0,
+    };
+
+    current.budgetTotal += toAmount(row.totalBudget);
+    current.approvedTotal += toAmount(row.totalApproved);
+    current.remaining += toAmount(row.remainingBudget);
+    current.operationApproved += toAmount(row.operationApproved);
+    current.purchaseApproved += toAmount(row.purchaseApproved);
+    current.operationCount += Number(row.operationCount || 0);
+    current.purchaseCount += Number(row.purchaseCount || 0);
+    deptMap.set(key, current);
+  }
+
+  return [...deptMap.values()];
+}
+
 /**
  * 按部门汇总预算金额，用于柱状图
  * 返回格式: [{ deptName, production, nonProduction }]
@@ -8,7 +63,7 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
   const deptMap = new Map();
 
   for (const row of productionRows) {
-    const dept = (row.deptName || '未知').trim();
+    const dept = canonicalDeptName(row.deptName);
     const amount = toAmount(row.requestAmount);
     const current = deptMap.get(dept) || { deptName: dept, production: 0, nonProduction: 0 };
     current.production += amount;
@@ -16,7 +71,7 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
   }
 
   for (const row of operationRows) {
-    const dept = (row.deptName || '未知').trim();
+    const dept = canonicalDeptName(row.deptName);
     const amount = toAmount(row.amount);
     const current = deptMap.get(dept) || { deptName: dept, production: 0, nonProduction: 0 };
     current.nonProduction += amount;
@@ -24,7 +79,7 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
   }
 
   return [...deptMap.values()]
-    .sort((a, b) => (b.production + b.nonProduction) - (a.production + b.nonProduction))
+    .sort((a, b) => (b.production + b.nonProduction) - (a.production + a.nonProduction))
     .slice(0, 12); // 取前12个部门
 }
 
@@ -115,13 +170,13 @@ export function buildBudgetTypeDistribution(productionRows, operationRows) {
  * 返回格式: [{ deptName, budgetTotal, approvedTotal, executionRate }]
  */
 export function buildExecutionRateData(executionRows) {
-  return executionRows
+  return aggregateExecutionRowsByDept(executionRows)
     .map((row) => ({
       deptName: row.deptName,
-      budgetTotal: toAmount(row.totalBudget),
-      approvedTotal: toAmount(row.totalApproved),
-      remaining: toAmount(row.remainingBudget),
-      executionRate: row.totalBudget > 0 ? Number(((toAmount(row.totalApproved) / toAmount(row.totalBudget)) * 100).toFixed(1)) : 0,
+      budgetTotal: toAmount(row.budgetTotal),
+      approvedTotal: toAmount(row.approvedTotal),
+      remaining: toAmount(row.remaining),
+      executionRate: row.budgetTotal > 0 ? Number(((toAmount(row.approvedTotal) / toAmount(row.budgetTotal)) * 100).toFixed(1)) : 0,
     }))
     .sort((a, b) => b.executionRate - a.executionRate)
     .slice(0, 10);
@@ -132,14 +187,13 @@ export function buildExecutionRateData(executionRows) {
  * 返回格式: [{ deptName, budget, approved }]
  */
 export function buildDeptApprovedComparison(executionRows) {
-  return executionRows
+  return aggregateExecutionRowsByDept(executionRows)
     .map((row) => ({
       deptName: row.deptName,
-      month: row.budgetMonth,
-      budget: toAmount(row.totalBudget),
-      approved: toAmount(row.totalApproved),
+      budget: toAmount(row.budgetTotal),
+      approved: toAmount(row.approvedTotal),
     }))
-    .sort((a, b) => b.budget - a.budget)
+    .sort((a, b) => (b.budget + b.approved) - (a.budget + a.approved))
     .slice(0, 10);
 }
 
@@ -188,11 +242,11 @@ export function buildExecutionStatus(executionRows, productionRecords, nonProduc
   const deptMap = new Map();
 
   // 1. 从 executionRows 汇总已执行金额 + 预算总额
-  for (const row of executionRows) {
-    const dept = (row.deptName || '未知').trim();
+  for (const row of aggregateExecutionRowsByDept(executionRows)) {
+    const dept = canonicalDeptName(row.deptName);
     const cur = deptMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
-    cur.totalBudget += toAmount(row.totalBudget);
-    cur.executed += toAmount(row.totalApproved);
+    cur.totalBudget += toAmount(row.budgetTotal);
+    cur.executed += toAmount(row.approvedTotal);
     deptMap.set(dept, cur);
   }
 
@@ -200,11 +254,11 @@ export function buildExecutionStatus(executionRows, productionRecords, nonProduc
   const addPending = (records) => {
     for (const r of records) {
       if (r.status === '审批中') {
-        const dept = (r.dept_name || '未知').trim();
+        const dept = canonicalDeptName(r.dept_name);
         const cur = deptMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
         cur.inProgress += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
         // 审批中的记录也可能已计入 totalBudget，不需要再加一次
-        if (!executionRows.some((er) => er.deptName === dept)) {
+        if (!executionRows.some((er) => canonicalDeptName(er.deptName) === dept)) {
           cur.totalBudget += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
         }
         deptMap.set(dept, cur);
