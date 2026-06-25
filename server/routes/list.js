@@ -51,21 +51,6 @@ function normalizeDept(value) {
   return String(value || '').trim();
 }
 
-function canonicalDeptName(value) {
-  const text = normalizeDept(value);
-  if (!text) return 'Unknown';
-
-  const compact = text.replace(/\s+/g, '');
-  if (/^YUEWEI/i.test(compact)) {
-    const parts = text.split('-').map((part) => part.trim()).filter(Boolean);
-    if (parts.length >= 2) {
-      return parts[parts.length - 1];
-    }
-  }
-
-  return text;
-}
-
 function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '') || '';
 }
@@ -83,7 +68,7 @@ function summarizeApprovedDetails(details) {
   const grouped = new Map();
 
   for (const item of details) {
-    const department = canonicalDeptName(firstNonEmpty(
+    const department = normalizeDept(firstNonEmpty(
       item.department_resolved,
       item.applicant_department,
       item.creator_department,
@@ -121,6 +106,7 @@ async function fetchApprovedExpenseSummary(dateRange) {
   const detailMap = new Map();
   const params = {
     debug: 1,
+    flow_status: 'completed',
     ...(dateRange.startDate ? { start_date: dateRange.startDate } : {}),
     ...(dateRange.endDate ? { end_date: dateRange.endDate } : {}),
   };
