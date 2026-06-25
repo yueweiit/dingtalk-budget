@@ -329,7 +329,7 @@ export default function VisualReport({ onBack }) {
           </div>
           <div style={styles.statCard}>
             <div style={{ ...styles.statValue, color: '#7c3aed' }}>¥{formatCurrency(stats.approvedTotal)}</div>
-            <div style={styles.statLabel}>已审批支出合计</div>
+            <div style={styles.statLabel}>实际支出合计</div>
           </div>
           <div style={styles.statCard}>
             <div style={styles.statValue}>{stats.overallRate}</div>
@@ -448,9 +448,9 @@ export default function VisualReport({ onBack }) {
             </ResponsiveContainer>
           </div>
 
-          {/* 部门预算 vs 已审批对比 - 分组柱状图 */}
+          {/* 部门预算 vs 支出对比 - 分组柱状图 */}
           <div style={styles.chartCard}>
-            <h3 style={styles.chartTitle}>部门预算 vs 已审批支出（Top 10）</h3>
+            <h3 style={styles.chartTitle}>部门预算 vs 实际支出（Top 10）</h3>
             <ResponsiveContainer width="100%" height={360}>
               <BarChart data={deptComp} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -459,7 +459,7 @@ export default function VisualReport({ onBack }) {
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
                 <Bar dataKey="budget" name="预算金额" fill={CHART_BLUE} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="approved" name="已审批支出" fill={CHART_AMBER} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="approved" name="实际支出" fill={CHART_AMBER} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -294,10 +294,19 @@ const displayValue = (value) => {
   return value;
 };
 
+const monthStart = (value = dayjs()) => dayjs(value).startOf('month').format('YYYY-MM-DD');
+const monthEnd = (value = dayjs()) => dayjs(value).endOf('month').format('YYYY-MM-DD');
+const displayMonth = (startDate, endDate) => {
+  const startMonth = startDate ? dayjs(startDate).format('YYYY-MM') : '';
+  const endMonth = endDate ? dayjs(endDate).format('YYYY-MM') : '';
+  if (startMonth && startMonth === endMonth) return startMonth;
+  return startMonth || endMonth || '不限';
+};
+
 export default function BudgetList({ onGoToVisual }) {
   const [activeTab, setActiveTab] = useState('production');
-  const [startDate, setStartDate] = useState(dayjs().subtract(30, 'day').format('YYYY-MM-DD'));
-  const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [startDate, setStartDate] = useState(monthStart());
+  const [endDate, setEndDate] = useState(monthEnd());
   const [data, setData] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -367,7 +376,7 @@ export default function BudgetList({ onGoToVisual }) {
         reportStartDate: startDate,
         reportEndDate: endDate,
       });
-      const filename = `预算报表_${startDate || '开始'}_${endDate || '结束'}.xlsx`;
+      const filename = `预算报表_${displayMonth(startDate, endDate)}.xlsx`;
       saveWorkbook(workbook, filename);
     } catch (error) {
       console.error('Export report error:', error);
@@ -399,7 +408,7 @@ export default function BudgetList({ onGoToVisual }) {
             <p style={styles.eyebrow}>DingTalk Budget</p>
             <h1 style={styles.title}>预算管理系统</h1>
             <p style={styles.subtitle}>
-              当前筛选：{startDate || '不限'} 至 {endDate || '不限'}，{activeTitle} 共 {total} 条
+              当前月份：{displayMonth(startDate, endDate)}，{activeTitle} 共 {total} 条
             </p>
           </div>
 

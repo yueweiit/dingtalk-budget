@@ -56,30 +56,37 @@ const styles = {
 };
 
 export default function DateFilter({ startDate, endDate, onStartDateChange, onEndDateChange, onSearch }) {
+  const sourceDate = startDate || endDate;
+  const selectedMonth = sourceDate && dayjs(sourceDate).isValid()
+    ? dayjs(sourceDate).format('YYYY-MM')
+    : '';
+
+  const setMonthRange = (month) => {
+    if (!month) {
+      onStartDateChange('');
+      onEndDateChange('');
+      return;
+    }
+
+    const date = dayjs(`${month}-01`);
+    onStartDateChange(date.startOf('month').format('YYYY-MM-DD'));
+    onEndDateChange(date.endOf('month').format('YYYY-MM-DD'));
+  };
+
   const handleReset = () => {
-    onStartDateChange(dayjs().subtract(30, 'day').format('YYYY-MM-DD'));
-    onEndDateChange(dayjs().format('YYYY-MM-DD'));
+    setMonthRange(dayjs().format('YYYY-MM'));
     onSearch();
   };
 
   return (
     <div style={styles.container}>
       <label style={styles.field}>
-        <span style={styles.label}>开始日期</span>
+        <span style={styles.label}>预算月份</span>
         <input
-          type="date"
+          type="month"
           style={styles.input}
-          value={startDate}
-          onChange={(event) => onStartDateChange(event.target.value)}
-        />
-      </label>
-      <label style={styles.field}>
-        <span style={styles.label}>结束日期</span>
-        <input
-          type="date"
-          style={styles.input}
-          value={endDate}
-          onChange={(event) => onEndDateChange(event.target.value)}
+          value={selectedMonth}
+          onChange={(event) => setMonthRange(event.target.value)}
         />
       </label>
       <div style={styles.actions}>

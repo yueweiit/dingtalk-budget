@@ -757,7 +757,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const executionSheetRows = [
-    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '已审批运营支出', '已审批采购支出', '已审批支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
+    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '运营支出', '采购支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
     ...executionRows.map((row, index) => [
       index + 1,
       row.deptName,
@@ -781,14 +781,14 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['非生产预算单数', nonProduction.length],
     ['生产预算明细行数', productionRows.length],
     ['非生产预算明细行数', operationRows.length],
-    ['审批支出明细行数', approvedDetailRows.length],
+    ['实际支出明细行数', approvedDetailRows.length],
     ['预算占比分类数', budgetShareRows.length],
     ['支出占比分类数', expenseShareRows.length],
     ['生产预算金额', sumRows(executionRows, 'productionBudget').toFixed(2)],
     ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
-    ['已审批运营支出金额', sumRows(executionRows, 'operationApproved').toFixed(2)],
-    ['已审批采购支出金额', sumRows(executionRows, 'purchaseApproved').toFixed(2)],
-    ['已审批支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
+    ['运营支出金额', sumRows(executionRows, 'operationApproved').toFixed(2)],
+    ['采购支出金额', sumRows(executionRows, 'purchaseApproved').toFixed(2)],
+    ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
     ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
   ];
 
@@ -901,7 +901,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     .sort((a, b) => b.executionRate - a.executionRate)
     .slice(0, 10);
 
-  // 5. 部门预算 vs 已审批对比（Top 10）
+  // 5. 部门预算 vs 支出对比（Top 10）
   const deptCompRows = executionRows
     .map((r) => ({
       deptName: r.deptName,
@@ -945,7 +945,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const execRateSheetRows = [
-    ['序号', '所属部门', '预算月份', '预算总额', '已审批支出', '剩余额度', '执行率'],
+    ['序号', '所属部门', '预算月份', '预算总额', '实际支出', '剩余额度', '执行率'],
     ...execRateRows.map((r, i) => [
       i + 1,
       r.deptName,
@@ -1041,7 +1041,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const deptCompSheetRows = [
-    ['序号', '所属部门', '预算月份', '预算金额', '已审批支出', '剩余额度'],
+    ['序号', '所属部门', '预算月份', '预算金额', '实际支出', '剩余额度'],
     ...deptCompRows.map((r, i) => [
       i + 1,
       r.deptName,
@@ -1065,7 +1065,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { sheetIndex: 4, sheetName: '2026年月度预算趋势', chart: lineChartXml({ sheetName: '2026年月度预算趋势', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }, { col: 'E' }], rowCount: trendRowCount, title: '2026年月度预算趋势' }) },
     { sheetIndex: 5, sheetName: '预算类型占比', chart: pieChartXml({ sheetName: '预算类型占比', labelCol: 'A', valueCol: 'B', rowCount: 4, title: '预算类型占比' }) },
     { sheetIndex: 6, sheetName: '部门执行率', chart: barChartXml({ sheetName: '部门执行率', labelCol: 'B', series: [{ col: 'G' }], rowCount: execRateRowCount, title: '各部门执行率', grouping: 'clustered', barDir: 'bar' }) },
-    { sheetIndex: 7, sheetName: '预算vs已审批', chart: barChartXml({ sheetName: '预算vs已审批', labelCol: 'B', series: [{ col: 'D' }, { col: 'E' }], rowCount: deptCompRowCount, title: '预算 vs 已审批支出', grouping: 'clustered' }) },
+    { sheetIndex: 7, sheetName: '预算vs支出', chart: barChartXml({ sheetName: '预算vs支出', labelCol: 'B', series: [{ col: 'D' }, { col: 'E' }], rowCount: deptCompRowCount, title: '预算 vs 实际支出', grouping: 'clustered' }) },
   ];
 
   const sheets = [
@@ -1077,10 +1077,10 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '2026年月度预算趋势', rows: trendSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '预算类型占比', rows: typeDistributionSheetRows, widths: [18, 18, 14] },
     { name: '部门执行率', rows: execRateSheetRows, widths: [8, 28, 14, 18, 18, 18, 12] },
-    { name: '预算vs已审批', rows: deptCompSheetRows, widths: [8, 28, 14, 18, 18, 18] },
+    { name: '预算vs支出', rows: deptCompSheetRows, widths: [8, 28, 14, 18, 18, 18] },
     { name: '部门预算占比', rows: budgetShareSheetRows, widths: [8, 28, 14, 18, 28, 16, 18, 12, 10] },
     { name: '部门支出占比', rows: expenseShareSheetRows, widths: [8, 28, 14, 14, 40, 18, 20, 12, 10] },
-    { name: '审批支出明细', rows: approvedDetailSheetRows, widths: [8, 12, 28, 14, 24, 36, 14, 18, 14, 14, 14, 16, 14] },
+    { name: '实际支出明细', rows: approvedDetailSheetRows, widths: [8, 12, 28, 14, 24, 36, 14, 18, 14, 14, 14, 16, 14] },
     { name: '非生产预算明细', rows: operationSheetRows, widths: [8, 22, 16, 14, 14, 18, 14, 10, 24, 14, 34, 22, 14, 14] },
     { name: '生产预算明细', rows: productionSheetRows, widths: [8, 22, 14, 14, 14, 16, 16, 24, 22, 10, 12, 14, 14, 16, 16, 16, 16, 16, 26, 14, 24, 22] },
   ];

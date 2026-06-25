@@ -183,7 +183,7 @@ export function buildExecutionRateData(executionRows) {
 }
 
 /**
- * 部门预算 vs 已审批对比，用于分组柱状图
+ * 部门预算 vs 支出对比，用于分组柱状图
  * 返回格式: [{ deptName, budget, approved }]
  */
 export function buildDeptApprovedComparison(executionRows) {

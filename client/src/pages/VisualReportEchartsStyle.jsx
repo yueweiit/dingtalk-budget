@@ -133,6 +133,13 @@ function resolveReportMonth(startDate, endDate) {
   return startMonth && startMonth === endMonth ? startMonth : '';
 }
 
+const monthStart = (value = dayjs()) => dayjs(value).startOf('month').format('YYYY-MM-DD');
+const monthEnd = (value = dayjs()) => dayjs(value).endOf('month').format('YYYY-MM-DD');
+const displayMonth = (startDate, endDate) => resolveReportMonth(startDate, endDate) || '不限';
+const reportYear = (startDate, endDate) => dayjs(startDate || endDate || dayjs()).format('YYYY');
+const yearStart = (year) => `${year}-01-01`;
+const yearEnd = (year) => `${year}-12-31`;
+
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload || !payload.length) return null;
   return (
@@ -155,11 +162,14 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function VisualReportEchartsStyle({ onBack }) {
-  const [startDate, setStartDate] = useState(dayjs().subtract(30, 'day').format('YYYY-MM-DD'));
-  const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [startDate, setStartDate] = useState(monthStart());
+  const [endDate, setEndDate] = useState(monthEnd());
   const [reportData, setReportData] = useState(null);
+  const [trendReportData, setTrendReportData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [trendLoading, setTrendLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [trendErrorMessage, setTrendErrorMessage] = useState('');
 
   const fetchReport = async () => {
     setLoading(true);
@@ -179,9 +189,35 @@ export default function VisualReportEchartsStyle({ onBack }) {
     }
   };
 
+  const fetchTrendReport = async () => {
+    const year = reportYear(startDate, endDate);
+    setTrendLoading(true);
+    setTrendErrorMessage('');
+    try {
+      const result = await getReportData({
+        startDate: yearStart(year),
+        endDate: yearEnd(year),
+        includeApproved: 1,
+      });
+      setTrendReportData(result.data || {});
+    } catch (error) {
+      console.error('Fetch trend report error:', error);
+      setTrendReportData(null);
+      setTrendErrorMessage(error.response?.data?.message || error.message || '加载全年趋势数据失败');
+    } finally {
+      setTrendLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchReport();
+    fetchTrendReport();
   }, [startDate, endDate]);
+
+  const refreshAllReports = () => {
+    fetchReport();
+    fetchTrendReport();
+  };
 
   const chartData = useMemo(() => {
     if (!reportData) return null;
@@ -190,7 +226,10 @@ export default function VisualReportEchartsStyle({ onBack }) {
     const operationRows = buildOperationRows(reportData.nonProduction || []);
     const approvedDetailRows = buildApprovedDetailRows(reportData.approvedExpenseDetails || []);
     const reportMonth = resolveReportMonth(startDate, endDate);
-    const trendYear = dayjs(endDate || startDate || dayjs().format('YYYY-MM-DD')).format('YYYY');
+    const trendYear = reportYear(startDate, endDate);
+    const trendProductionRows = buildProductionRows(trendReportData?.production || []);
+    const trendOperationRows = buildOperationRows(trendReportData?.nonProduction || []);
+    const trendApprovedDetailRows = buildApprovedDetailRows(trendReportData?.approvedExpenseDetails || []);
     const execRows = buildExecutionRows({
       productionRows,
       operationRows,
@@ -200,7 +239,8 @@ export default function VisualReportEchartsStyle({ onBack }) {
 
     return {
       deptSummary: buildDeptBudgetSummary(productionRows, operationRows),
-      trend: buildBudgetTrend(productionRows, operationRows, approvedDetailRows, { year: trendYear }),
+      trend: buildBudgetTrend(trendProductionRows, trendOperationRows, trendApprovedDetailRows, { year: trendYear }),
+      trendYear,
       typeDist: buildBudgetTypeDistribution(productionRows, operationRows),
       execRate: buildExecutionRateData(execRows),
       deptComp: buildDeptApprovedComparison(execRows),
@@ -208,13 +248,13 @@ export default function VisualReportEchartsStyle({ onBack }) {
       execStatus: buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []),
       stats: buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows),
     };
-  }, [reportData, startDate, endDate]);
+  }, [reportData, trendReportData, startDate, endDate]);
 
   if (loading) return <div style={styles.loading}>数据加载中...</div>;
   if (errorMessage) return <div style={styles.empty}>{errorMessage}</div>;
   if (!chartData) return <div style={styles.empty}>暂无报表数据</div>;
 
-  const { deptSummary, trend, typeDist, execRate, deptComp, regionDist, execStatus, stats } = chartData;
+  const { deptSummary, trend, trendYear, typeDist, execRate, deptComp, regionDist, execStatus, stats } = chartData;
 
   return (
     <div style={styles.page}>
@@ -222,7 +262,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
         <div style={styles.header}>
           <div>
             <h1 style={styles.title}>可视化报表</h1>
-            <p style={styles.subtitle}>当前筛选：{startDate || '不限'} 至 {endDate || '不限'}</p>
+            <p style={styles.subtitle}>当前月份：{displayMonth(startDate, endDate)}</p>
           </div>
           {onBack && (
             <button style={styles.refreshButton} onClick={onBack}>
@@ -237,9 +277,9 @@ export default function VisualReportEchartsStyle({ onBack }) {
             endDate={endDate}
             onStartDateChange={setStartDate}
             onEndDateChange={setEndDate}
-            onSearch={fetchReport}
+            onSearch={refreshAllReports}
           />
-          <button style={styles.refreshButton} onClick={fetchReport}>
+          <button style={styles.refreshButton} onClick={refreshAllReports}>
             刷新数据
           </button>
         </div>
@@ -263,7 +303,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
           </div>
           <div style={styles.statCard}>
             <div style={{ ...styles.statValue, color: '#7c3aed' }}>{formatCurrency(stats.approvedTotal)}</div>
-            <div style={styles.statLabel}>已审批支出合计</div>
+            <div style={styles.statLabel}>实际支出合计</div>
           </div>
           <div style={styles.statCard}>
             <div style={styles.statValue}>{stats.overallRate}</div>
@@ -343,20 +383,29 @@ export default function VisualReportEchartsStyle({ onBack }) {
           </div>
 
           <div style={styles.chartFull}>
-            <h3 style={styles.chartTitle}>月度预算趋势</h3>
-            <ResponsiveContainer width="100%" height={360}>
-              <LineChart data={trend} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="monthLabel" tick={{ fontSize: 12, fill: '#6b7280' }} />
-                <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend />
-                <Line type="monotone" dataKey="total" name="预算合计" stroke={CHART_AMBER} strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-                <Line type="monotone" dataKey="production" name="生产预算" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-                <Line type="monotone" dataKey="nonProduction" name="非生产预算" stroke="#0f766e" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-                <Line type="monotone" dataKey="actualExpense" name="实际支出" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <h3 style={styles.chartTitle}>月度预算趋势（{trendYear}）</h3>
+            {trendErrorMessage && (
+              <div style={{ ...styles.empty, padding: '8px 0 16px', color: '#b45309' }}>
+                {trendErrorMessage}
+              </div>
+            )}
+            {trendLoading ? (
+              <div style={styles.loading}>全年趋势数据加载中...</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart data={trend} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="monthLabel" tick={{ fontSize: 12, fill: '#6b7280' }} />
+                  <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} tickFormatter={formatCurrency} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend />
+                  <Line type="monotone" dataKey="total" name="预算合计" stroke={CHART_AMBER} strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                  <Line type="monotone" dataKey="production" name="生产预算" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="nonProduction" name="非生产预算" stroke="#0f766e" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                  <Line type="monotone" dataKey="actualExpense" name="实际支出" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
 
           <div style={styles.chartCard}>
@@ -379,7 +428,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
           </div>
 
           <div style={styles.chartCard}>
-            <h3 style={styles.chartTitle}>部门预算 vs 已审批支出（Top 10）</h3>
+            <h3 style={styles.chartTitle}>部门预算 vs 实际支出（Top 10）</h3>
             <ResponsiveContainer width="100%" height={360}>
               <BarChart data={deptComp} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -388,7 +437,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
                 <Bar dataKey="budget" name="预算金额" fill="#2563eb" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="approved" name="已审批支出" fill={CHART_AMBER} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="approved" name="实际支出" fill={CHART_AMBER} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

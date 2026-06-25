@@ -47,6 +47,27 @@ function formatMonth(value) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+const budgetMonthExpr = "COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, ''))";
+
+function appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate) {
+  const startMonth = formatMonth(startDate);
+  const endMonth = formatMonth(endDate);
+
+  if (startMonth) {
+    whereClause += ` AND ${budgetMonthExpr} >= $${paramIndex}`;
+    params.push(startMonth);
+    paramIndex++;
+  }
+
+  if (endMonth) {
+    whereClause += ` AND ${budgetMonthExpr} <= $${paramIndex}`;
+    params.push(endMonth);
+    paramIndex++;
+  }
+
+  return { whereClause, paramIndex };
+}
+
 function normalizeDept(value) {
   return String(value || '').trim();
 }
@@ -62,6 +83,37 @@ function numberValue(value) {
 
 function approvedDetailMonth(item) {
   return formatMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
+}
+
+const excludedExpenseStatusKeywords = [
+  'reject',
+  'refuse',
+  'cancel',
+  'terminate',
+  '撤销',
+  '取消',
+  '拒绝',
+  '驳回',
+];
+
+function isExcludedExpense(item) {
+  const statusValues = [
+    item.approval_status,
+    item.flow_status,
+    item.status,
+    item.biz_action,
+    item.result,
+    item.approval_result,
+    item.approve_result,
+    item.process_result,
+    item.process_status,
+  ];
+
+  return statusValues.some((value) => {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return false;
+    return excludedExpenseStatusKeywords.some((keyword) => text.includes(keyword));
+  });
 }
 
 function summarizeApprovedDetails(details) {
@@ -106,7 +158,6 @@ async function fetchApprovedExpenseSummary(dateRange) {
   const detailMap = new Map();
   const params = {
     debug: 1,
-    flow_status: 'completed',
     ...(dateRange.startDate ? { start_date: dateRange.startDate } : {}),
     ...(dateRange.endDate ? { end_date: dateRange.endDate } : {}),
   };
@@ -124,19 +175,19 @@ async function fetchApprovedExpenseSummary(dateRange) {
     const purchaseItems = (Array.isArray(purchase.data?.items) ? purchase.data.items : [])
       ;
 
-    for (const item of operationItems) {
+    for (const item of operationItems.filter((expense) => !isExcludedExpense(expense))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, expense_kind: 'operation', query_month: queryMonth });
     }
 
-    for (const item of purchaseItems) {
+    for (const item of purchaseItems.filter((expense) => !isExcludedExpense(expense))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, expense_kind: 'purchase', query_month: queryMonth });
     }
   } catch (error) {
-    warnings.push(isProduction ? '审批支出接口不可用' : `审批支出接口不可用：${error.message}`);
+    warnings.push(isProduction ? '支出接口不可用' : `支出接口不可用：${error.message}`);
   }
 
   const details = [...detailMap.values()];
@@ -153,17 +204,7 @@ router.get('/production', async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
-    if (startDate) {
-      whereClause += ` AND create_time >= $${paramIndex}`;
-      params.push(startDate + ' 00:00:00');
-      paramIndex++;
-    }
-
-    if (endDate) {
-      whereClause += ` AND create_time <= $${paramIndex}`;
-      params.push(endDate + ' 23:59:59');
-      paramIndex++;
-    }
+    ({ whereClause, paramIndex } = appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate));
 
     if (status) {
       whereClause += ` AND status = $${paramIndex}`;
@@ -229,17 +270,7 @@ router.get('/non-production', async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
-    if (startDate) {
-      whereClause += ` AND create_time >= $${paramIndex}`;
-      params.push(startDate + ' 00:00:00');
-      paramIndex++;
-    }
-
-    if (endDate) {
-      whereClause += ` AND create_time <= $${paramIndex}`;
-      params.push(endDate + ' 23:59:59');
-      paramIndex++;
-    }
+    ({ whereClause, paramIndex } = appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate));
 
     if (status) {
       whereClause += ` AND status = $${paramIndex}`;
@@ -364,7 +395,6 @@ router.get('/report', async (req, res) => {
     const params = [];
     let whereClause = 'WHERE 1=1';
     let paramIndex = 1;
-    const budgetMonthExpr = "COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, ''))";
 
     if (startDate) {
       whereClause += ` AND ${budgetMonthExpr} >= $${paramIndex}`;
