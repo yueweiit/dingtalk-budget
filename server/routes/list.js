@@ -302,13 +302,27 @@ function summarizeApprovedDetails(details) {
   return [...grouped.values()];
 }
 
+/** 将 YYYY-MM 短格式展开为完整日期 YYYY-MM-DD，避免支出 API 的 timestamp 列报错 */
+function expandMonthDate(value, isEndDate = false) {
+  if (!value) return value;
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = text.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return text;
+  if (isEndDate) {
+    const lastDay = new Date(Number(match[1]), Number(match[2]), 0).getDate();
+    return `${match[1]}-${match[2]}-${String(lastDay).padStart(2, '0')}`;
+  }
+  return `${match[1]}-${match[2]}-01`;
+}
+
 async function fetchApprovedExpenseSummary(dateRange) {
   const warnings = [];
   const detailMap = new Map();
   const params = {
     debug: 1,
-    ...(dateRange.startDate ? { start_date: dateRange.startDate } : {}),
-    ...(dateRange.endDate ? { end_date: dateRange.endDate } : {}),
+    ...(dateRange.startDate ? { start_date: expandMonthDate(dateRange.startDate, false) } : {}),
+    ...(dateRange.endDate ? { end_date: expandMonthDate(dateRange.endDate, true) } : {}),
   };
 
   try {
@@ -324,13 +338,13 @@ async function fetchApprovedExpenseSummary(dateRange) {
     const purchaseItems = (Array.isArray(purchase.data?.items) ? purchase.data.items : [])
       ;
 
-    for (const item of operationItems.filter(isApprovedExpense)) {
+    for (const item of operationItems.filter((e) => !isExcludedExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, expense_kind: 'operation', query_month: queryMonth });
     }
 
-    for (const item of purchaseItems.filter(isApprovedExpense)) {
+    for (const item of purchaseItems.filter((e) => !isExcludedExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, expense_kind: 'purchase', query_month: queryMonth });
