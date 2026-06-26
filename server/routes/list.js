@@ -76,6 +76,73 @@ function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '') || '';
 }
 
+/** 部门名归一化用于跨系统匹配：去掉空格、统一大小写 */
+function compactDept(value) {
+  return String(value || '').replace(/\s+/g, '').toLowerCase();
+}
+
+/** 从已审批支出汇总构建查找表：key = compactDept__YYYY-MM → total */
+function buildExpenseLookup(expenseItems) {
+  const map = new Map();
+  for (const item of expenseItems || []) {
+    const deptKey = compactDept(item.department);
+    const month = item.month;
+    if (!deptKey || !month) continue;
+    const key = `${deptKey}__${month}`;
+    const existing = map.get(key) || 0;
+    map.set(key, existing + Number(item.operationTotal || 0) + Number(item.purchaseTotal || 0));
+  }
+  return (deptName, budgetMonth) => {
+    const val = map.get(`${compactDept(deptName)}__${budgetMonth}`);
+    return val || 0;
+  };
+}
+
+/** 按部门+月份获取已审批支出，并按预算占比分配到每条记录 */
+async function attachExpenseAmounts(records, { startDate, endDate }) {
+  if (!records || records.length === 0) return records;
+
+  // 获取已审批支出汇总
+  let expenseLookup = () => 0;
+  try {
+    const result = await fetchApprovedExpenseSummary({ startDate, endDate });
+    expenseLookup = buildExpenseLookup(result.items);
+  } catch { /* 支出接口不可用时降级为 0 */ }
+
+  // 按部门+月份分组，计算每组预算总额
+  const groups = new Map(); // key: deptKey__month → { records, totalBudget }
+  const budgetMonthFn = (row) => String(row.budget_month || row.declaration_month || '');
+
+  for (const row of records) {
+    const key = `${compactDept(row.dept_name)}__${budgetMonthFn(row)}`;
+    const group = groups.get(key) || { records: [], totalBudget: 0 };
+    group.records.push(row);
+    group.totalBudget += Number(row.total_amount || row.budget_amount || row.monthly_budget_amount || 0);
+    groups.set(key, group);
+  }
+
+  // 按预算占比分配支出到每条记录
+  return records.map((row) => {
+    const key = `${compactDept(row.dept_name)}__${budgetMonthFn(row)}`;
+    const group = groups.get(key);
+    const totalExpense = expenseLookup(row.dept_name, budgetMonthFn(row));
+
+    let approvedAmount = 0;
+    if (group && totalExpense > 0) {
+      if (group.totalBudget > 0) {
+        // 按预算占比分配
+        const recordBudget = Number(row.total_amount || row.budget_amount || row.monthly_budget_amount || 0);
+        approvedAmount = Number(((recordBudget / group.totalBudget) * totalExpense).toFixed(2));
+      } else {
+        // 预算全为0时均分
+        approvedAmount = Number((totalExpense / group.records.length).toFixed(2));
+      }
+    }
+
+    return { ...row, approved_amount: approvedAmount };
+  });
+}
+
 function numberValue(value) {
   const number = Number(String(value ?? '').replace(/,/g, ''));
   return Number.isFinite(number) ? number : 0;
@@ -116,38 +183,79 @@ function isExcludedExpense(item) {
   });
 }
 
+/** 从支出记录的 JSONB 拆分列中提取各部门明细金额（原始币种） */
+function extractDeptSplitEntries(item) {
+  const entries = [];
+  const splitColumns = ['salary_by_department', 'social_insurance_by_department', 'office_space_by_department'];
+
+  for (const col of splitColumns) {
+    const data = item[col];
+    if (!data || !Array.isArray(data)) continue;
+    for (const entry of data) {
+      const dept = normalizeDept(entry.department);
+      const amt = numberValue(entry.amount);
+      if (dept && amt > 0) {
+        entries.push({ department: dept, amount: amt });
+      }
+    }
+  }
+
+  return entries;
+}
+
 function summarizeApprovedDetails(details) {
   const grouped = new Map();
 
   for (const item of details) {
-    const department = normalizeDept(firstNonEmpty(
-      item.department_resolved,
-      item.applicant_department,
-      item.creator_department,
-      item.query_department
-    ));
     const month = item.query_month || approvedDetailMonth(item);
-    if (!department || !month) continue;
-
-    const key = `${department}__${month}`;
-    const current = grouped.get(key) || {
-      department,
-      month,
-      operationTotal: 0,
-      operationCount: 0,
-      purchaseTotal: 0,
-      purchaseCount: 0,
-    };
+    if (!month) continue;
 
     const amount = numberValue(firstNonEmpty(item.base_currency_amount, item.amount, item.detail_summary_amount));
+
     if (item.expense_kind === 'purchase') {
+      // 采购支出：不拆分，直接归申请人部门
+      const department = normalizeDept(firstNonEmpty(
+        item.department_resolved, item.applicant_department,
+        item.creator_department, item.query_department
+      ));
+      if (!department) continue;
+      const key = `${department}__${month}`;
+      const current = grouped.get(key) || { department, month, operationTotal: 0, operationCount: 0, purchaseTotal: 0, purchaseCount: 0 };
       current.purchaseTotal += amount;
       current.purchaseCount += 1;
-    } else {
+      grouped.set(key, current);
+      continue;
+    }
+
+    // 运营支出：检查是否有部门拆分数据
+    const splitEntries = extractDeptSplitEntries(item);
+    if (splitEntries.length === 0) {
+      // 无拆分：直接归申请人部门
+      const department = normalizeDept(firstNonEmpty(
+        item.department_resolved, item.applicant_department,
+        item.creator_department, item.query_department
+      ));
+      if (!department) continue;
+      const key = `${department}__${month}`;
+      const current = grouped.get(key) || { department, month, operationTotal: 0, operationCount: 0, purchaseTotal: 0, purchaseCount: 0 };
       current.operationTotal += amount;
       current.operationCount += 1;
+      grouped.set(key, current);
+      continue;
     }
-    grouped.set(key, current);
+
+    // 有拆分：按各部门占比分配 base_currency_amount
+    const splitTotal = splitEntries.reduce((sum, e) => sum + e.amount, 0);
+    for (const entry of splitEntries) {
+      if (splitTotal <= 0) break;
+      const ratio = entry.amount / splitTotal;
+      const splitAmount = amount * ratio;
+      const key = `${entry.department}__${month}`;
+      const current = grouped.get(key) || { department: entry.department, month, operationTotal: 0, operationCount: 0, purchaseTotal: 0, purchaseCount: 0 };
+      current.operationTotal += splitAmount;
+      current.operationCount += ratio;
+      grouped.set(key, current);
+    }
   }
 
   return [...grouped.values()];
@@ -247,9 +355,12 @@ router.get('/production', async (req, res) => {
     const countQuery = `SELECT COUNT(*) FROM production_budget ${whereClause}`;
     const countResult = await query(countQuery, params.slice(0, -2));
 
+    // 按部门+月份分配已审批支出到每条记录
+    const rowsWithExpense = await attachExpenseAmounts(dataResult.rows, { startDate, endDate });
+
     res.json({
       success: true,
-      data: dataResult.rows,
+      data: rowsWithExpense,
       total: parseInt(countResult.rows[0].count),
       page: parseInt(page),
       pageSize: parseInt(pageSize),
@@ -311,9 +422,12 @@ router.get('/non-production', async (req, res) => {
     const countQuery = `SELECT COUNT(*) FROM non_production_budget ${whereClause}`;
     const countResult = await query(countQuery, params.slice(0, -2));
 
+    // 按部门+月份分配已审批支出到每条记录
+    const rowsWithExpense = await attachExpenseAmounts(dataResult.rows, { startDate, endDate });
+
     res.json({
       success: true,
-      data: dataResult.rows,
+      data: rowsWithExpense,
       total: parseInt(countResult.rows[0].count),
       page: parseInt(page),
       pageSize: parseInt(pageSize),

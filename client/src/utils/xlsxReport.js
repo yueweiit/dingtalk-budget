@@ -562,22 +562,74 @@ const expenseKindLabel = (value) => {
   return value || '';
 };
 
-export const buildApprovedDetailRows = (approvedExpenseDetails = []) => approvedExpenseDetails
-  .map((item) => ({
-    expenseKind: expenseKindLabel(item.expense_kind),
-    department: firstValue(item, ['department_resolved', 'applicant_department', 'creator_department', 'query_department'], ''),
-    month: firstValue(item, ['query_month'], formatMonth(item.source_created_at || item.request_date || item.approval_completed_at)),
-    businessId: item.business_id,
-    title: item.title,
-    amount: firstValue(item, ['amount', 'detail_summary_amount', 'source_amount', 'total_amount', 'base_currency_amount'], ''),
-    baseCurrencyAmount: firstValue(item, ['base_currency_amount', 'amount_rmb'], ''),
-    approvalStatus: item.approval_status,
-    requestDate: formatDate(item.request_date),
-    sourceCreatedAt: formatDate(item.source_created_at),
-    approvalCompletedAt: formatDate(item.approval_completed_at),
-    bizAction: item.biz_action,
-  }))
-  .sort((a, b) => String(a.month).localeCompare(String(b.month)) || String(a.department).localeCompare(String(b.department)));
+const extractExpenseDeptSplits = (item) => {
+  const entries = [];
+  const splitColumns = ['salary_by_department', 'social_insurance_by_department', 'office_space_by_department'];
+
+  for (const col of splitColumns) {
+    const data = item?.[col];
+    if (!data || !Array.isArray(data)) continue;
+    for (const entry of data) {
+      const dept = String(entry.department || '').trim();
+      const amt = toAmount(entry.amount);
+      if (dept && amt > 0) {
+        entries.push({ department: dept, amount: amt, note: entry.note || '' });
+      }
+    }
+  }
+
+  return entries;
+};
+
+export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
+  approvedExpenseDetails
+    .flatMap((item) => {
+      const splits = extractExpenseDeptSplits(item);
+      const baseAmount = toAmount(firstValue(item, ['base_currency_amount', 'amount_rmb', 'amount'], ''));
+      const month = firstValue(item, ['query_month'], formatMonth(item.source_created_at || item.request_date || item.approval_completed_at));
+
+      if (splits.length === 0) {
+        // 无拆分：保持原有的单行
+        return [{
+          expenseKind: expenseKindLabel(item.expense_kind),
+          department: firstValue(item, ['department_resolved', 'applicant_department', 'creator_department', 'query_department'], ''),
+          month,
+          businessId: item.business_id,
+          title: item.title,
+          amount: firstValue(item, ['amount', 'detail_summary_amount', 'source_amount', 'total_amount', 'base_currency_amount'], ''),
+          baseCurrencyAmount: baseAmount,
+          approvalStatus: item.approval_status,
+          requestDate: formatDate(item.request_date),
+          sourceCreatedAt: formatDate(item.source_created_at),
+          approvalCompletedAt: formatDate(item.approval_completed_at),
+          bizAction: item.biz_action,
+          splitNote: '',
+        }];
+      }
+
+      // 有部门拆分：按占比展开为多行
+      const splitTotal = splits.reduce((sum, e) => sum + e.amount, 0);
+      return splits.map((entry) => {
+        const ratio = splitTotal > 0 ? entry.amount / splitTotal : 0;
+        const splitAmount = baseAmount * ratio;
+        return {
+          expenseKind: expenseKindLabel(item.expense_kind),
+          department: entry.department,
+          month,
+          businessId: item.business_id,
+          title: item.title,
+          amount: splitAmount,
+          baseCurrencyAmount: splitAmount,
+          approvalStatus: item.approval_status,
+          requestDate: formatDate(item.request_date),
+          sourceCreatedAt: formatDate(item.source_created_at),
+          approvalCompletedAt: formatDate(item.approval_completed_at),
+          bizAction: item.biz_action,
+          splitNote: `工资拆分自 ${item.business_id || ''}（原始总额 ${baseAmount.toFixed(2)}）`,
+        };
+      });
+    })
+    .sort((a, b) => String(a.month).localeCompare(String(b.month)) || String(a.department).localeCompare(String(b.department)));
 
 export const buildExecutionRows = ({ productionRows, operationRows, approvedExpenses, reportMonth }) => {
   const grouped = new Map();
@@ -793,7 +845,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const approvedDetailSheetRows = [
-    ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '业务动作'],
+    ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '业务动作', '备注'],
     ...approvedDetailRows.map((row, index) => [
       index + 1,
       row.expenseKind,
@@ -808,6 +860,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.sourceCreatedAt,
       row.approvalCompletedAt,
       row.bizAction,
+      row.splitNote || '',
     ]),
   ];
 
