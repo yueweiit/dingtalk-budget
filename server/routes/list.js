@@ -99,14 +99,16 @@ function buildExpenseLookup(expenseItems) {
 }
 
 /** 按部门+月份获取已审批支出，并按预算占比分配到每条记录 */
-async function attachExpenseAmounts(records, { startDate, endDate }) {
+async function attachExpenseAmounts(records, { startDate, endDate, approvedItems } = {}) {
   if (!records || records.length === 0) return records;
 
   // 获取已审批支出汇总
   let expenseLookup = () => 0;
   try {
-    const result = await fetchApprovedExpenseSummary({ startDate, endDate });
-    expenseLookup = buildExpenseLookup(result.items);
+    const items = Array.isArray(approvedItems)
+      ? approvedItems
+      : (await fetchApprovedExpenseSummary({ startDate, endDate })).items;
+    expenseLookup = buildExpenseLookup(items);
   } catch { /* 支出接口不可用时降级为 0 */ }
 
   // 按部门+月份分组，计算每组预算总额
@@ -184,6 +186,45 @@ function isExcludedExpense(item) {
 }
 
 /** 从支出记录的 JSONB 拆分列中提取各部门明细金额（原始币种） */
+const approvedExpenseStatusKeywords = [
+  'completed',
+  'running',        // 钉钉审批流大量已通过记录 approval_status 仍为 RUNNING，未被驳回/终止即视为有效
+  'approved',
+  'agree',
+  'pass',
+  'done',
+  'finish',
+  'success',
+  '已通过',
+  '已完成',
+  '同意',
+  '通过',
+  '完成',
+];
+
+function isApprovedExpense(item) {
+  if (isExcludedExpense(item)) return false;
+  if (item.approval_completed_at) return true;
+
+  const statusValues = [
+    item.approval_status,
+    item.flow_status,
+    item.status,
+    item.biz_action,
+    item.result,
+    item.approval_result,
+    item.approve_result,
+    item.process_result,
+    item.process_status,
+  ];
+
+  return statusValues.some((value) => {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return false;
+    return approvedExpenseStatusKeywords.some((keyword) => text.includes(String(keyword).toLowerCase()));
+  });
+}
+
 function extractDeptSplitEntries(item) {
   const entries = [];
   const splitColumns = ['salary_by_department', 'social_insurance_by_department', 'office_space_by_department'];
@@ -283,13 +324,13 @@ async function fetchApprovedExpenseSummary(dateRange) {
     const purchaseItems = (Array.isArray(purchase.data?.items) ? purchase.data.items : [])
       ;
 
-    for (const item of operationItems.filter((expense) => !isExcludedExpense(expense))) {
+    for (const item of operationItems.filter(isApprovedExpense)) {
       const queryMonth = approvedDetailMonth(item);
       const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, expense_kind: 'operation', query_month: queryMonth });
     }
 
-    for (const item of purchaseItems.filter((expense) => !isExcludedExpense(expense))) {
+    for (const item of purchaseItems.filter(isApprovedExpense)) {
       const queryMonth = approvedDetailMonth(item);
       const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, expense_kind: 'purchase', query_month: queryMonth });
@@ -595,19 +636,35 @@ router.get('/report', async (req, res) => {
       await exportClient.end();
     }
 
+    let warnings = [];
+    let approvedItems = null;
+    let approvedDetails = null;
+    if (String(includeApproved || '') === '1') {
+      const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
+      approvedItems = approved.items;
+      approvedDetails = approved.details;
+      warnings = approved.warnings;
+    }
+
+    const productionRows = await attachExpenseAmounts(
+      productionResult.rows,
+      { startDate, endDate, approvedItems }
+    );
+    const nonProductionRows = await attachExpenseAmounts(
+      nonProductionResult.rows,
+      { startDate, endDate, approvedItems }
+    );
+
     const responseData = {
-      production: productionResult.rows,
-      nonProduction: nonProductionResult.rows,
+      production: productionRows,
+      nonProduction: nonProductionRows,
       reportStartDate: startDate || '',
       reportEndDate: endDate || '',
     };
 
-    let warnings = [];
-    if (String(includeApproved || '') === '1') {
-      const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
-      responseData.approvedExpenses = approved.items;
-      responseData.approvedExpenseDetails = approved.details;
-      warnings = approved.warnings;
+    if (approvedItems) {
+      responseData.approvedExpenses = approvedItems;
+      responseData.approvedExpenseDetails = approvedDetails;
     }
 
     res.json({
