@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import DateFilter from '../components/DateFilter';
+import ReactEChartsCore from 'echarts-for-react/lib/core';
+import * as echarts from 'echarts';
 
 import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
@@ -303,6 +305,70 @@ const displayMonth = (startDate, endDate) => {
   return startMonth || endMonth || '不限';
 };
 
+function toNum(v) { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; }
+function fmtWan(v) { const n = toNum(v); return n >= 10000 ? '¥' + (n / 10000).toFixed(2) + '万' : '¥' + n.toFixed(2); }
+
+function computeBudgetBreakdown(detail) {
+  const hr = (detail?.hr_items || detail?.hrItems || []).reduce((s, x) => s + toNum(x.amount), 0);
+  const office = (detail?.office_items || detail?.officeItems || []).reduce((s, x) => s + toNum(x.amount), 0);
+  const operation = (detail?.operation_items || detail?.operationItems || []).reduce((s, x) => s + toNum(x.amount), 0);
+  const total = hr + office + operation || toNum(detail?.total_amount || detail?.budget_amount || 0);
+  // If no detail items, use total_amount
+  if (hr === 0 && office === 0 && operation === 0) {
+    const t = toNum(detail?.total_amount || detail?.budget_amount || detail?.monthly_budget_amount || 0);
+    return { hr: 0, office: 0, operation: t, total: t };
+  }
+  return { hr, office, operation, total };
+}
+
+function computeExpenseBreakdown(rawDetails, deptName, budgetMonth) {
+  const key = String(deptName || '').replace(/\s+/g, '').toLowerCase();
+  let operationExp = 0, purchaseExp = 0, salaryExp = 0, officeExp = 0;
+
+  for (const item of rawDetails || []) {
+    const itemMonth = item.query_month || '';
+    if (itemMonth !== budgetMonth) continue;
+
+    // 从 salary/office 拆分列提取该部门的份额
+    const splits = [
+      { col: 'salary_by_department', target: 'salary' },
+      { col: 'social_insurance_by_department', target: 'salary' },
+      { col: 'office_space_by_department', target: 'office' },
+    ];
+    for (const s of splits) {
+      const entries = item[s.col];
+      if (!Array.isArray(entries)) continue;
+      for (const e of entries) {
+        if (String(e.department || '').replace(/\s+/g, '').toLowerCase() === key) {
+          const amt = toNum(e.amount);
+          if (s.target === 'salary') salaryExp += amt;
+          else officeExp += amt;
+        }
+      }
+    }
+
+    // 非拆分的按部门直接归入 operation/purchase
+    const itemDept = String(item.department_resolved || item.applicant_department || '').replace(/\s+/g, '').toLowerCase();
+    if (itemDept !== key) continue;
+    const amt = toNum(item.base_currency_amount);
+    if (item.expense_kind === 'purchase') {
+      purchaseExp += amt;
+    } else {
+      operationExp += amt;
+    }
+  }
+
+  return { operation: operationExp, purchase: purchaseExp, salary: salaryExp, office: officeExp, total: operationExp + purchaseExp + salaryExp + officeExp };
+}
+
+function downloadCSV(rows, filename) {
+  const BOM = '﻿';
+  const csv = BOM + rows.map(r => r.map(c => '"' + String(c || '').replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+
 export default function BudgetList({ onGoToVisual }) {
   const [activeTab, setActiveTab] = useState('production');
   const [startDate, setStartDate] = useState(monthStart());
@@ -315,7 +381,10 @@ export default function BudgetList({ onGoToVisual }) {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
+  const [detailExpense, setDetailExpense] = useState(null);
+  const [detailExpenseRaw, setDetailExpenseRaw] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const chartRef = useRef(null);
 
   const activeTitle = useMemo(
     () => tabs.find((tab) => tab.key === activeTab)?.label || '预算',
@@ -388,10 +457,17 @@ export default function BudgetList({ onGoToVisual }) {
 
   const handleOpenDetail = async (item) => {
     setDetailItem(item);
+    setDetailExpense(null);
     try {
-      const type = activeTab === 'production' ? 'production' : 'non-production';
-      const detail = await getBudgetDetail(item.form_no, type);
-      setDetailItem({ ...item, ...detail });
+      const bm = item.budget_month || item.declaration_month || '';
+      // 用 report 接口获取完整明细（含 hr_items/office_items/operation_items）
+      const rpt = await getReportData({ startDate: bm, endDate: bm, includeApproved: 1 });
+      // 从 nonProduction 中找到匹配的 form_no
+      const records = activeTab === 'production' ? (rpt.data?.production || []) : (rpt.data?.nonProduction || []);
+      const detail = records.find(r => r.form_no === item.form_no) || item;
+      setDetailItem(detail);
+      setDetailExpense(rpt.data?.approvedExpenses || []);
+      setDetailExpenseRaw(rpt.data?.approvedExpenseDetails || []);
     } catch (error) {
       console.error('Fetch detail error:', error);
       setDetailItem(item);
@@ -592,6 +668,108 @@ export default function BudgetList({ onGoToVisual }) {
                     </div>
                   ))}
                 </div>
+
+                {/* 预算与支出明细模块 */}
+                {detailExpenseRaw !== null && (() => {
+                  const budget = computeBudgetBreakdown(detailItem);
+                  const bm = detailItem.budget_month || detailItem.declaration_month || '';
+                  const exp = computeExpenseBreakdown(detailExpenseRaw, detailItem.dept_name, bm);
+                  const remaining = budget.total - exp.total;
+
+                  const chartOption = {
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    toolbox: { feature: { saveAsImage: { title: '保存图片' } }, right: 10 },
+                    grid: { top: 60, bottom: 40, left: 60, right: 20 },
+                    legend: { data: ['预算', '支出'], top: 10 },
+                    xAxis: { type: 'category', data: ['管理/运营', '工资', '场地'] },
+                    yAxis: { type: 'value', axisLabel: { formatter: (v) => v >= 10000 ? (v/10000)+'万' : v } },
+                    series: [
+                      { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, budget.office], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                      { name: '支出', type: 'bar', color: '#52c41a', data: [exp.operation + exp.purchase, exp.salary, exp.office], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                    ],
+                  };
+
+                  const csvRows = [
+                    ['类别', '预算金额', '支出金额', '对比(预算-支出)'],
+                    ['管理/运营', budget.operation.toFixed(2), (exp.operation + exp.purchase).toFixed(2), (budget.operation - exp.operation - exp.purchase).toFixed(2)],
+                    ['工资', budget.hr.toFixed(2), exp.salary.toFixed(2), (budget.hr - exp.salary).toFixed(2)],
+                    ['场地', budget.office.toFixed(2), exp.office.toFixed(2), (budget.office - exp.office).toFixed(2)],
+                  ];
+
+                  return (
+                    <div style={{ marginTop: 20, borderTop: '1px solid #e5e7eb', paddingTop: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>预算与支出明细</h3>
+                        <div style={{ position: 'relative' }}>
+                          <button style={{ ...styles.detailButton, background: '#2563eb', color: '#fff', border: 'none' }}
+                            onClick={(e) => { const menu = e.currentTarget.nextSibling; menu.style.display = menu.style.display === 'none' ? 'block' : 'none'; }}>
+                            导出 ▾
+                          </button>
+                          <div style={{ display: 'none', position: 'absolute', right: 0, top: 34, background: '#fff', border: '1px solid #d1d5db', borderRadius: 6, boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 10, minWidth: 140 }}>
+                            <div style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f3f4f6' }}
+                              onClick={() => {
+                                const chart = chartRef.current?.getEchartsInstance?.();
+                                if (chart) { const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' }); const a = document.createElement('a'); a.href = url; a.download = (detailItem.form_no || 'chart') + '.png'; a.click(); }
+                              }}>导出图表图片</div>
+                            <div style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 13 }}
+                              onClick={() => downloadCSV(csvRows, (detailItem.form_no || 'detail') + '.csv')}>导出 Excel/CSV</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 六列卡片 */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
+                        <div style={{ background: '#e6f0ff', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb', marginBottom: 4 }}>管理预算</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.operation)}</div>
+                        </div>
+                        <div style={{ background: '#e6f0ff', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb', marginBottom: 4 }}>工资预算</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.hr)}</div>
+                        </div>
+                        <div style={{ background: '#e6f0ff', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb', marginBottom: 4 }}>场地预算</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.office)}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>运营/采购支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.operation + exp.purchase)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>工资支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.salary)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>场地支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.office)}</div>
+                        </div>
+                      </div>
+
+                      {/* 图表 */}
+                      <div style={{ marginBottom: 16 }}>
+                        <ReactEChartsCore ref={chartRef} echarts={echarts} option={chartOption} style={{ height: 320 }} notMerge lazyUpdate />
+                      </div>
+
+                      {/* 底部汇总 */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                        <div style={{ background: '#e6f0ff', padding: 14, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb' }}>总预算</div>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.total)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 14, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a' }}>总支出</div>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.total)}</div>
+                        </div>
+                        <div style={{ background: remaining < 0 ? '#fff1f0' : '#fff7e6', padding: 14, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: remaining < 0 ? '#cf1322' : '#d46b08' }}>剩余</div>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: remaining < 0 ? '#cf1322' : '#d46b08' }}>{fmtWan(remaining)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>

@@ -10,6 +10,7 @@ import {
   parseOfficeItems,
   parseOperationItems,
   getBudgetType,
+  isBudgetRequest,
 } from '../services/parser.js';
 import { query, pool } from '../db/index.js';
 import { assertValidTable } from '../utils/db.js';
@@ -151,6 +152,18 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
   }
 
   const formNo = detail.businessId;
+
+  // 运营支出单据跳过，不同步到预算表
+  if (!isBudgetRequest(detail)) {
+    console.log(`[SYNC] Skip expense instance: ${formNo}`);
+    return {
+      success: true,
+      synced: 0, added: 0, updated: 0, existing: 0,
+      pending: 0, skipped: 1,
+      reason: `Expense instance skipped (not a budget request): ${formNo}`,
+    };
+  }
+
   const budgetType = getBudgetType(detail);
   const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
 

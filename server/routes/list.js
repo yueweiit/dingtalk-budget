@@ -48,6 +48,8 @@ function formatMonth(value) {
 }
 
 const budgetMonthExpr = "COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, ''))";
+// 按部门+预算月份去重，每组合保留最新一条
+const dedupKey = `${budgetMonthExpr}, dept_name`;
 
 function appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate) {
   const startMonth = formatMonth(startDate);
@@ -394,11 +396,15 @@ router.get('/production', async (req, res) => {
       { name: 'remark' },
     ]);
 
-    // 查询数据
+    // 查询数据（按部门+月份去重，保留最新）
     const dataQuery = `
       SELECT ${selectList}
-      FROM production_budget
-      ${whereClause}
+      FROM (
+        SELECT DISTINCT ON (${dedupKey}) *
+        FROM production_budget
+        ${whereClause}
+        ORDER BY ${dedupKey}, create_time DESC
+      ) t
       ORDER BY create_time DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
@@ -407,7 +413,7 @@ router.get('/production', async (req, res) => {
     const dataResult = await query(dataQuery, params);
 
     // 查询总数
-    const countQuery = `SELECT COUNT(*) FROM production_budget ${whereClause}`;
+    const countQuery = `SELECT COUNT(*) FROM (SELECT DISTINCT ON (${dedupKey}) id FROM production_budget ${whereClause} ORDER BY ${dedupKey}, create_time DESC) t`;
     const countResult = await query(countQuery, params.slice(0, -2));
 
     // 按部门+月份分配已审批支出到每条记录
@@ -465,8 +471,12 @@ router.get('/non-production', async (req, res) => {
 
     const dataQuery = `
       SELECT ${selectList}
-      FROM non_production_budget
-      ${whereClause}
+      FROM (
+        SELECT DISTINCT ON (${dedupKey}) *
+        FROM non_production_budget
+        ${whereClause}
+        ORDER BY ${dedupKey}, create_time DESC
+      ) t
       ORDER BY create_time DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
@@ -474,7 +484,7 @@ router.get('/non-production', async (req, res) => {
 
     const dataResult = await query(dataQuery, params);
 
-    const countQuery = `SELECT COUNT(*) FROM non_production_budget ${whereClause}`;
+    const countQuery = `SELECT COUNT(*) FROM (SELECT DISTINCT ON (${dedupKey}) id FROM non_production_budget ${whereClause} ORDER BY ${dedupKey}, create_time DESC) t`;
     const countResult = await query(countQuery, params.slice(0, -2));
 
     // 按部门+月份分配已审批支出到每条记录
@@ -541,10 +551,10 @@ router.get('/stats', async (req, res) => {
 
     const statsResult = await query(`
       SELECT
-        (SELECT COUNT(*) FROM production_budget WHERE DATE(create_time) = $1) as production_today,
-        (SELECT COUNT(*) FROM non_production_budget WHERE DATE(create_time) = $1) as non_production_today,
-        (SELECT COUNT(*) FROM production_budget) as production_total,
-        (SELECT COUNT(*) FROM non_production_budget) as non_production_total
+        (SELECT COUNT(*) FROM (SELECT DISTINCT ON (${dedupKey}) id FROM production_budget WHERE DATE(create_time) = $1 ORDER BY ${dedupKey}, create_time DESC) t) as production_today,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT ON (${dedupKey}) id FROM non_production_budget WHERE DATE(create_time) = $1 ORDER BY ${dedupKey}, create_time DESC) t) as non_production_today,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT ON (${dedupKey}) id FROM production_budget ORDER BY ${dedupKey}, create_time DESC) t) as production_total,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT ON (${dedupKey}) id FROM non_production_budget ORDER BY ${dedupKey}, create_time DESC) t) as non_production_total
     `, [today]);
 
     res.json({

@@ -207,6 +207,13 @@ function parseNonProductionRow(row, kind) {
   return item;
 }
 
+/** 判断是否为预算申请单（排除运营支出单据） */
+export function isBudgetRequest(dingtalkData) {
+  var title = String(dingtalkData.title || '').toLowerCase();
+  if (title.includes('gastos de operación') || title.includes('运营支出')) return false;
+  return true;
+}
+
 export function getBudgetType(dingtalkData) {
   const formValues = dingtalkData.formComponentValues || [];
   const budgetType = textOf(getFormValue(formValues, ['预算类型', 'Tipo de presupuesto']));
