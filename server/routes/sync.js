@@ -12,6 +12,16 @@ import {
   getBudgetType,
   isBudgetRequest,
 } from '../services/parser.js';
+
+// getStatus 需要直接 import 用于状态对比
+function getStatusFromData(detail) {
+  const statusStr = String(detail.status || '').toUpperCase();
+  const resultStr = String(detail.result || '').toLowerCase();
+  if (resultStr === 'refuse' || resultStr === 'reject') return '已驳回';
+  if (statusStr === 'COMPLETED' && resultStr === 'agree') return '已通过';
+  if (statusStr === 'TERMINATED' || statusStr === 'CANCELLED' || statusStr === 'CANCELED') return '已撤销';
+  return '审批中';
+}
 import { query, pool } from '../db/index.js';
 import { assertValidTable } from '../utils/db.js';
 
@@ -153,19 +163,26 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
 
   const formNo = detail.businessId;
 
-  // 运营支出单据跳过，不同步到预算表
-  if (!isBudgetRequest(detail)) {
-    console.log(`[SYNC] Skip expense instance: ${formNo}`);
-    return {
-      success: true,
-      synced: 0, added: 0, updated: 0, existing: 0,
-      pending: 0, skipped: 1,
-      reason: `Expense instance skipped (not a budget request): ${formNo}`,
-    };
-  }
-
   const budgetType = getBudgetType(detail);
   const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
+
+  // 运营支出：如果已误入预算表则更新状态，否则跳过
+  if (!isBudgetRequest(detail)) {
+    const existCheck = await query(`SELECT id, status FROM ${tableName} WHERE form_no = $1 LIMIT 1`, [formNo]);
+    if (existCheck.rows.length > 0) {
+      const localStatus = existCheck.rows[0].status;
+      const dingtalkStatus = getStatusFromData(detail);
+      if (localStatus !== dingtalkStatus) {
+        await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
+        console.log(`[SYNC] Expense status updated: formNo=${formNo}, ${localStatus} -> ${dingtalkStatus}`);
+      }
+      return { success: true, synced: 0, added: 0, updated: 1, existing: 0, pending: 0, skipped: 0,
+        formNo, processInstanceId, budgetType, message: `Expense recycled: ${localStatus} -> ${dingtalkStatus}` };
+    }
+    console.log(`[SYNC] Skip expense instance: ${formNo}`);
+    return { success: true, synced: 0, added: 0, updated: 0, existing: 0, pending: 0, skipped: 1,
+      reason: `Expense instance skipped (not a budget request): ${formNo}` };
+  }
 
   console.log(`[SYNC] Sync instance: processInstanceId=${processInstanceId}, formNo=${formNo}, budgetType=${budgetType}`);
 
@@ -175,19 +192,27 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
   );
 
   if (existCheck.rows.length > 0) {
+    // 检查钉钉最新状态是否与本地不一致，不一致则更新
+    const localStatus = existCheck.rows[0].status;
+    const dingtalkStatus = detail._parsedStatus || getStatusFromData(detail);
+    if (localStatus !== dingtalkStatus) {
+      await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
+      console.log(`[SYNC] Status updated: formNo=${formNo}, ${localStatus} -> ${dingtalkStatus}`);
+      detail._parsedStatus = dingtalkStatus;
+      return {
+        success: true,
+        synced: 0, added: 0, updated: 1, existing: 0, pending: 0, skipped: 0,
+        formNo, processInstanceId, budgetType,
+        message: `Status updated: ${localStatus} -> ${dingtalkStatus}`,
+      };
+    }
+
     if (!updateExisting) {
       console.log(`[SYNC] Already exists, no update: formNo=${formNo}`);
       return {
         success: true,
-        synced: 0,
-        added: 0,
-        updated: 0,
-        existing: 1,
-        pending: 0,
-        skipped: 0,
-        formNo,
-        processInstanceId,
-        budgetType,
+        synced: 0, added: 0, updated: 0, existing: 1, pending: 0, skipped: 0,
+        formNo, processInstanceId, budgetType,
         message: 'Budget record already exists',
       };
     }

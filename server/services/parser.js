@@ -74,10 +74,20 @@ function getFormValue(formValues, keywords) {
 }
 
 function getStatus(dingtalkData) {
-  if (dingtalkData.status !== 'COMPLETED') return '审批中';
-  if (dingtalkData.result === 'agree') return '已通过';
-  if (dingtalkData.result === 'refuse' || dingtalkData.result === 'reject') return '已拒绝';
-  return '已撤回';
+  const statusStr = String(dingtalkData.status || '').toUpperCase();
+  const resultStr = String(dingtalkData.result || '').toLowerCase();
+
+  // 驳回优先
+  if (resultStr === 'refuse' || resultStr === 'reject') return '已驳回';
+
+  // COMPLETED + agree → 已通过
+  if (statusStr === 'COMPLETED' && resultStr === 'agree') return '已通过';
+
+  // TERMINATED / CANCELLED → 已撤销（含 TERMINATED+agree+finishTime 的特殊情况）
+  if (statusStr === 'TERMINATED' || statusStr === 'CANCELLED' || statusStr === 'CANCELED') return '已撤销';
+
+  // NEW / RUNNING / 其他 → 审批中
+  return '审批中';
 }
 
 function toMonthValue(value) {
