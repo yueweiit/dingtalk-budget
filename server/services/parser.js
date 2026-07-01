@@ -217,11 +217,24 @@ function parseNonProductionRow(row, kind) {
   return item;
 }
 
-/** 判断是否为预算申请单（排除运营支出单据） */
+export function hasBudgetDetailItems(dingtalkData, budgetType = getBudgetType(dingtalkData)) {
+  if (budgetType === 'production') {
+    return parseMaterialItems(dingtalkData).length > 0 ||
+      parseProductionItems(dingtalkData).length > 0 ||
+      parseLaborItems(dingtalkData).length > 0;
+  }
+
+  return parseHrItems(dingtalkData).length > 0 ||
+    parseOfficeItems(dingtalkData).length > 0 ||
+    parseOperationItems(dingtalkData).length > 0;
+}
+
+/** 判断是否为预算申请单（排除运营/采购支出等无预算明细流程） */
 export function isBudgetRequest(dingtalkData) {
-  var title = String(dingtalkData.title || '').toLowerCase();
+  const title = String(dingtalkData.title || '').toLowerCase();
   if (title.includes('gastos de operación') || title.includes('运营支出')) return false;
-  return true;
+  if (title.includes('purchase') || title.includes('采购支出')) return false;
+  return hasBudgetDetailItems(dingtalkData);
 }
 
 export function getBudgetType(dingtalkData) {

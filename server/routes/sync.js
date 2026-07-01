@@ -1,4 +1,5 @@
 import express from 'express';
+import axios from 'axios';
 import { getProcessInstanceIds, getProcessInstanceDetail } from '../services/dingtalk.js';
 import {
   parseProductionBudget,
@@ -12,31 +13,59 @@ import {
   getBudgetType,
   isBudgetRequest,
 } from '../services/parser.js';
+import { query, pool } from '../db/index.js';
+import { assertValidTable } from '../utils/db.js';
 
 // getStatus 需要直接 import 用于状态对比
 function getStatusFromData(detail) {
   const statusStr = String(detail.status || '').toUpperCase();
-  const resultStr = String(detail.result || '').toLowerCase();
-  if (resultStr === 'refuse' || resultStr === 'reject') return '已驳回';
+  const resultStr = String(detail.result || detail.flowResult || '').toLowerCase();
+  const bizActionStr = String(detail.bizAction || detail.biz_action || '').toUpperCase();
+  const taskResults = Array.isArray(detail.tasks)
+    ? detail.tasks.map((task) => String(task?.result || '').toLowerCase())
+    : [];
+  if (
+    resultStr === 'refuse' ||
+    resultStr === 'reject' ||
+    taskResults.some((result) => result === 'refuse' || result === 'reject')
+  ) {
+    return '已驳回';
+  }
   if (statusStr === 'COMPLETED' && resultStr === 'agree') return '已通过';
-  if (statusStr === 'TERMINATED' || statusStr === 'CANCELLED' || statusStr === 'CANCELED') return '已撤销';
+  if (
+    statusStr === 'TERMINATED' ||
+    statusStr === 'CANCELLED' ||
+    statusStr === 'CANCELED' ||
+    ['REVOKE', 'DELETE', 'TERMINATE', 'CANCEL', 'CANCELED', 'CANCELLED'].includes(bizActionStr)
+  ) {
+    return '已撤销';
+  }
   return '审批中';
 }
-import { query, pool } from '../db/index.js';
-import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
 const isProduction = process.env.NODE_ENV === 'production';
+const DEFAULT_STATUS_REFRESH_LIMIT = Number(process.env.MANUAL_STATUS_REFRESH_LIMIT || 500);
+const EXPENSE_SYNC_URL = process.env.EXPENSE_SYNC_URL || process.env.DINGTALK_EXPENSE_SYNC_URL || '';
+const EXPENSE_SYNC_TIMEOUT_MS = Number(process.env.EXPENSE_SYNC_TIMEOUT_MS || 180000);
 
 function getApprovalState(detail) {
   const statusStr = String(detail.status || '').toUpperCase();
-  const resultStr = String(detail.result || '').toLowerCase();
+  const resultStr = String(detail.result || detail.flowResult || '').toLowerCase();
+  const bizActionStr = String(detail.bizAction || detail.biz_action || '').toUpperCase();
+  const taskResults = Array.isArray(detail.tasks)
+    ? detail.tasks.map((task) => String(task?.result || '').toLowerCase())
+    : [];
   const hasFinishTime = Boolean(detail.finishTime || detail.finish_time);
   const isCancelled =
     statusStr === 'CANCELLED' ||
     statusStr === 'CANCELED' ||
-    statusStr.includes('CANCEL');
-  const isRefused = resultStr === 'refuse' || resultStr === 'reject';
+    statusStr.includes('CANCEL') ||
+    ['REVOKE', 'DELETE', 'TERMINATE', 'CANCEL', 'CANCELED', 'CANCELLED'].includes(bizActionStr);
+  const isRefused =
+    resultStr === 'refuse' ||
+    resultStr === 'reject' ||
+    taskResults.some((result) => result === 'refuse' || result === 'reject');
   const isApproved =
     (statusStr === 'COMPLETED' && resultStr === 'agree') ||
     (statusStr === 'TERMINATED' && resultStr === 'agree' && hasFinishTime);
@@ -50,6 +79,209 @@ function getApprovalState(detail) {
     retryable: !isCancelled && !isRefused,
     reason: `status=${detail.status || ''}, result=${detail.result || ''}`,
   };
+}
+
+function monthFromTimestamp(value) {
+  if (!value) return null;
+  const date = new Date(Number(value));
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function buildMonthFilter(alias, params, paramIndex, startTime, endTime) {
+  const startMonth = monthFromTimestamp(startTime);
+  const endMonth = monthFromTimestamp(endTime);
+  const monthExpr = `COALESCE(NULLIF(${alias}.budget_month, ''), NULLIF(${alias}.declaration_month, ''))`;
+  let sql = '';
+
+  if (startMonth) {
+    sql += ` AND ${monthExpr} >= $${paramIndex}`;
+    params.push(startMonth);
+    paramIndex++;
+  }
+
+  if (endMonth) {
+    sql += ` AND ${monthExpr} <= $${paramIndex}`;
+    params.push(endMonth);
+    paramIndex++;
+  }
+
+  return { sql, paramIndex };
+}
+
+async function updateExistingBudgetStatus(tableName, formNo, detail) {
+  const existing = await query(
+    `SELECT id, status FROM ${tableName} WHERE form_no = $1 LIMIT 1`,
+    [formNo]
+  );
+
+  if (existing.rows.length === 0) {
+    return { found: false, updated: false, localStatus: null, dingtalkStatus: getStatusFromData(detail) };
+  }
+
+  const localStatus = existing.rows[0].status;
+  const dingtalkStatus = detail._parsedStatus || getStatusFromData(detail);
+  if (localStatus !== dingtalkStatus) {
+    await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
+    console.log(`[SYNC] Status updated: table=${tableName}, formNo=${formNo}, ${localStatus} -> ${dingtalkStatus}`);
+    detail._parsedStatus = dingtalkStatus;
+    return { found: true, updated: true, localStatus, dingtalkStatus };
+  }
+
+  return { found: true, updated: false, localStatus, dingtalkStatus };
+}
+
+export async function refreshExistingBudgetStatuses(options = {}) {
+  const {
+    startTime,
+    endTime,
+    limit = DEFAULT_STATUS_REFRESH_LIMIT,
+  } = options;
+  const params = [];
+  let paramIndex = 1;
+  const productionFilter = buildMonthFilter('p', params, paramIndex, startTime, endTime);
+  paramIndex = productionFilter.paramIndex;
+  const nonProductionFilter = buildMonthFilter('n', params, paramIndex, startTime, endTime);
+  paramIndex = nonProductionFilter.paramIndex;
+  params.push(Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : DEFAULT_STATUS_REFRESH_LIMIT);
+
+  const result = await query(`
+    SELECT *
+    FROM (
+      SELECT 'production' AS budget_kind, p.form_no, p.process_instance_id, p.status,
+             COALESCE(NULLIF(p.budget_month, ''), NULLIF(p.declaration_month, '')) AS budget_month_key
+      FROM production_budget p
+      WHERE p.process_instance_id IS NOT NULL
+        AND TRIM(p.process_instance_id) <> ''
+        ${productionFilter.sql}
+      UNION ALL
+      SELECT 'non_production' AS budget_kind, n.form_no, n.process_instance_id, n.status,
+             COALESCE(NULLIF(n.budget_month, ''), NULLIF(n.declaration_month, '')) AS budget_month_key
+      FROM non_production_budget n
+      WHERE n.process_instance_id IS NOT NULL
+        AND TRIM(n.process_instance_id) <> ''
+        ${nonProductionFilter.sql}
+    ) rows
+    ORDER BY budget_month_key DESC NULLS LAST, form_no DESC
+    LIMIT $${paramIndex}
+  `, params);
+
+  const summary = {
+    checked: 0,
+    updated: 0,
+    unchanged: 0,
+    failed: 0,
+    limit: params[params.length - 1],
+    failures: [],
+  };
+
+  for (const row of result.rows) {
+    summary.checked++;
+    const tableName = assertValidTable(
+      row.budget_kind === 'production' ? 'production_budget' : 'non_production_budget'
+    );
+
+    try {
+      const detail = await getProcessInstanceDetail(row.process_instance_id);
+      if (!detail) {
+        summary.failed++;
+        summary.failures.push({ formNo: row.form_no, processInstanceId: row.process_instance_id, message: 'No DingTalk detail returned' });
+        continue;
+      }
+
+      const statusResult = await updateExistingBudgetStatus(tableName, row.form_no, detail);
+      if (statusResult.updated) {
+        summary.updated++;
+      } else {
+        summary.unchanged++;
+      }
+    } catch (error) {
+      summary.failed++;
+      summary.failures.push({
+        formNo: row.form_no,
+        processInstanceId: row.process_instance_id,
+        message: error.message,
+      });
+      console.error(`[ERROR] Failed to refresh status for ${row.form_no}:`, error.message);
+    }
+  }
+
+  return summary;
+}
+
+async function triggerExpenseManualSync(startTime, endTime) {
+  if (!EXPENSE_SYNC_URL) {
+    return {
+      success: true,
+      skipped: true,
+      message: '未配置 EXPENSE_SYNC_URL，已跳过支出同步',
+    };
+  }
+
+  const baseUrl = EXPENSE_SYNC_URL.replace(/\/+$/, '');
+  try {
+    const response = await axios.post(
+      `${baseUrl}/api/sync/manual`,
+      { startTime, endTime },
+      { timeout: EXPENSE_SYNC_TIMEOUT_MS }
+    );
+    return {
+      success: true,
+      skipped: false,
+      data: response.data,
+      message: response.data?.message || '支出同步已触发',
+    };
+  } catch (error) {
+    const message = error.response?.data?.message || error.response?.data?.error || error.message;
+    console.error('[ERROR] Expense manual sync failed:', message);
+    return {
+      success: false,
+      skipped: false,
+      message,
+    };
+  }
+}
+
+async function triggerExpenseSplitSync(startTime, endTime) {
+  if (!EXPENSE_SYNC_URL) {
+    const error = new Error('未配置 EXPENSE_SYNC_URL，无法同步支出拆分数据');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const baseUrl = EXPENSE_SYNC_URL.replace(/\/+$/, '');
+  const response = await axios.post(
+    `${baseUrl}/api/sync/operation-splits`,
+    {
+      startTime,
+      endTime,
+      splitTypes: ['salary', 'social_insurance', 'office_space'],
+    },
+    { timeout: EXPENSE_SYNC_TIMEOUT_MS }
+  );
+  return response.data;
+}
+
+function buildManualSyncMessage(budgetResult, statusRefresh, expenseSync) {
+  const parts = [
+    `预算同步：新增 ${budgetResult.added || 0}，更新 ${budgetResult.updated || 0}，已存在 ${budgetResult.existing || 0}，跳过 ${budgetResult.skipped || 0}`,
+  ];
+
+  if (statusRefresh) {
+    parts.push(`状态校准：检查 ${statusRefresh.checked || 0}，更新 ${statusRefresh.updated || 0}`);
+  }
+
+  if (expenseSync) {
+    if (expenseSync.skipped) {
+      parts.push('支出同步：未配置，已跳过');
+    } else if (expenseSync.success) {
+      parts.push('支出同步：已触发');
+    } else {
+      parts.push(`支出同步失败：${expenseSync.message || '未知错误'}`);
+    }
+  }
+
+  return parts.join('；');
 }
 
 export async function syncDingtalkData(startTime, endTime, options = {}) {
@@ -140,6 +372,28 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
     return { success: true, synced: 0, added: 0, updated: 0, existing: 0, pending: 1, skipped: 0, message: 'No DingTalk detail returned' };
   }
 
+  const formNo = detail.businessId;
+
+  const budgetType = getBudgetType(detail);
+  const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
+
+  const existingStatus = await updateExistingBudgetStatus(tableName, formNo, detail);
+  if (existingStatus.updated) {
+    return {
+      success: true,
+      synced: 0,
+      added: 0,
+      updated: 1,
+      existing: 0,
+      pending: 0,
+      skipped: 0,
+      formNo,
+      processInstanceId,
+      budgetType,
+      message: `Status updated: ${existingStatus.localStatus} -> ${existingStatus.dingtalkStatus}`,
+    };
+  }
+
   const approvalState = getApprovalState(detail);
   if (!approvalState.approved) {
     // 未审批的也入库（显示为审批中/已撤销等），但标注为 pending
@@ -180,23 +434,11 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
     };
   }
 
-  const formNo = detail.businessId;
-
-  const budgetType = getBudgetType(detail);
-  const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
-
   // 运营支出：如果已误入预算表则更新状态，否则跳过
   if (!isBudgetRequest(detail)) {
-    const existCheck = await query(`SELECT id, status FROM ${tableName} WHERE form_no = $1 LIMIT 1`, [formNo]);
-    if (existCheck.rows.length > 0) {
-      const localStatus = existCheck.rows[0].status;
-      const dingtalkStatus = getStatusFromData(detail);
-      if (localStatus !== dingtalkStatus) {
-        await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
-        console.log(`[SYNC] Expense status updated: formNo=${formNo}, ${localStatus} -> ${dingtalkStatus}`);
-      }
-      return { success: true, synced: 0, added: 0, updated: 1, existing: 0, pending: 0, skipped: 0,
-        formNo, processInstanceId, budgetType, message: `Expense recycled: ${localStatus} -> ${dingtalkStatus}` };
+    if (existingStatus.found) {
+      return { success: true, synced: 0, added: 0, updated: 0, existing: 1, pending: 0, skipped: 0,
+        formNo, processInstanceId, budgetType, message: `Expense record already exists with status ${existingStatus.localStatus}` };
     }
     console.log(`[SYNC] Skip expense instance: ${formNo}`);
     return { success: true, synced: 0, added: 0, updated: 0, existing: 0, pending: 0, skipped: 1,
@@ -211,21 +453,6 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
   );
 
   if (existCheck.rows.length > 0) {
-    // 检查钉钉最新状态是否与本地不一致，不一致则更新
-    const localStatus = existCheck.rows[0].status;
-    const dingtalkStatus = detail._parsedStatus || getStatusFromData(detail);
-    if (localStatus !== dingtalkStatus) {
-      await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
-      console.log(`[SYNC] Status updated: formNo=${formNo}, ${localStatus} -> ${dingtalkStatus}`);
-      detail._parsedStatus = dingtalkStatus;
-      return {
-        success: true,
-        synced: 0, added: 0, updated: 1, existing: 0, pending: 0, skipped: 0,
-        formNo, processInstanceId, budgetType,
-        message: `Status updated: ${localStatus} -> ${dingtalkStatus}`,
-      };
-    }
-
     if (!updateExisting) {
       console.log(`[SYNC] Already exists, no update: formNo=${formNo}`);
       return {
@@ -481,12 +708,59 @@ async function updateRecord(processInstanceId, detail, budgetType) {
 
 router.post('/', async (req, res) => {
   try {
-    const { startTime, endTime } = req.body;
+    const {
+      startTime,
+      endTime,
+      refreshExisting = true,
+      syncExpenses = true,
+    } = req.body;
     const result = await syncDingtalkData(startTime, endTime);
-    res.json(result);
+    const statusRefresh = refreshExisting
+      ? await refreshExistingBudgetStatuses({ startTime, endTime })
+      : null;
+    const expenseSync = syncExpenses
+      ? await triggerExpenseManualSync(startTime, endTime)
+      : null;
+
+    res.json({
+      ...result,
+      statusRefresh,
+      expenseSync,
+      message: buildManualSyncMessage(result, statusRefresh, expenseSync),
+    });
   } catch (error) {
     console.error('[ERROR] Sync error:', error);
     res.status(500).json({ success: false, message: isProduction ? '同步失败' : error.message });
+  }
+});
+
+router.post('/expense-splits', async (req, res) => {
+  try {
+    const { startTime, endTime } = req.body || {};
+    if (startTime === undefined || endTime === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime 和 endTime 必填',
+      });
+    }
+
+    const result = await triggerExpenseSplitSync(startTime, endTime);
+    res.json({
+      success: true,
+      data: result,
+      message: result.message || '支出拆分同步完成',
+    });
+  } catch (error) {
+    const status = error.statusCode || error.response?.status || 500;
+    const message = error.response?.data?.message ||
+      error.response?.data?.error ||
+      error.message ||
+      '支出拆分同步失败';
+    console.error('[ERROR] Expense split sync error:', message);
+    res.status(status).json({
+      success: false,
+      message: isProduction && status >= 500 ? '支出拆分同步失败' : message,
+    });
   }
 });
 

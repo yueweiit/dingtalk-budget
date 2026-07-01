@@ -139,6 +139,16 @@ const displayMonth = (startDate, endDate) => resolveReportMonth(startDate, endDa
 const reportYear = (startDate, endDate) => dayjs(startDate || endDate || dayjs()).format('YYYY');
 const yearStart = (year) => `${year}-01-01`;
 const yearEnd = (year) => `${year}-12-31`;
+const toNumber = (value) => {
+  const number = Number(String(value ?? '').replace(/,/g, ''));
+  return Number.isFinite(number) ? number : 0;
+};
+const buildAllocatedExpenseRows = (items = []) => items.map((item) => ({
+  department: item.department,
+  month: item.month,
+  baseCurrencyAmount: toNumber(item.operationTotal) + toNumber(item.purchaseTotal),
+  amount: toNumber(item.operationTotal) + toNumber(item.purchaseTotal),
+}));
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload || !payload.length) return null;
@@ -225,6 +235,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
     const productionRows = buildProductionRows(reportData.production || []);
     const operationRows = buildOperationRows(reportData.nonProduction || []);
     const approvedDetailRows = buildApprovedDetailRows(reportData.approvedExpenseDetails || []);
+    const allocatedExpenseRows = buildAllocatedExpenseRows(reportData.approvedExpenses || []);
     const reportMonth = resolveReportMonth(startDate, endDate);
     const trendYear = reportYear(startDate, endDate);
     const trendProductionRows = buildProductionRows(trendReportData?.production || []);
@@ -244,7 +255,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
       typeDist: buildBudgetTypeDistribution(productionRows, operationRows),
       execRate: buildExecutionRateData(execRows),
       deptComp: buildDeptApprovedComparison(execRows),
-      regionDist: buildRegionChartRows2(reportData.production || [], reportData.nonProduction || [], approvedDetailRows),
+      regionDist: buildRegionChartRows2(reportData.production || [], reportData.nonProduction || [], allocatedExpenseRows),
       execStatus: buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []),
       stats: buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows),
     };

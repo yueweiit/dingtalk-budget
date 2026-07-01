@@ -14,8 +14,14 @@ const api = axios.create({
 });
 
 // 同步钉钉数据
-export async function syncData(startTime, endTime) {
-  const response = await api.post('/sync', { startTime, endTime }, { timeout: 180000 });
+export async function syncData(startTime, endTime, options = {}) {
+  const response = await api.post('/sync', { startTime, endTime, ...options }, { timeout: 600000 });
+  return response.data;
+}
+
+// 同步运营支出拆分数据（工资、社保、办公场地）
+export async function syncExpenseSplits(startTime, endTime) {
+  const response = await api.post('/sync/expense-splits', { startTime, endTime }, { timeout: 600000 });
   return response.data;
 }
 

@@ -543,6 +543,9 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
     nonProductionBudget: 0,
     operationApproved: 0,
     purchaseApproved: 0,
+    managementApproved: 0,
+    salaryApproved: 0,
+    officeApproved: 0,
     operationCount: 0,
     purchaseCount: 0,
   };
@@ -562,18 +565,48 @@ const expenseKindLabel = (value) => {
   return value || '';
 };
 
+const splitTypeLabel = (value) => {
+  const type = String(value || '').trim().toLowerCase();
+  if (type === 'salary') return '工资';
+  if (type === 'social_insurance') return '社保公积金';
+  if (type === 'office_space') return '办公场地';
+  return value || '部门拆分';
+};
+
 const extractExpenseDeptSplits = (item) => {
   const entries = [];
-  const splitColumns = ['salary_by_department', 'social_insurance_by_department', 'office_space_by_department'];
+  const dbSplits = item?.expense_splits || item?.expenseSplits;
 
-  for (const col of splitColumns) {
+  if (Array.isArray(dbSplits)) {
+    for (const entry of dbSplits) {
+      const dept = String(entry.department || '').trim();
+      const amt = toAmount(entry.amount);
+      if (dept && amt > 0) {
+        entries.push({
+          department: dept,
+          amount: amt,
+          splitType: entry.split_type || entry.splitType || '',
+          note: entry.note || '',
+        });
+      }
+    }
+    return entries;
+  }
+
+  const splitColumns = [
+    { col: 'salary_by_department', splitType: 'salary' },
+    { col: 'social_insurance_by_department', splitType: 'social_insurance' },
+    { col: 'office_space_by_department', splitType: 'office_space' },
+  ];
+
+  for (const { col, splitType } of splitColumns) {
     const data = item?.[col];
     if (!data || !Array.isArray(data)) continue;
     for (const entry of data) {
       const dept = String(entry.department || '').trim();
       const amt = toAmount(entry.amount);
       if (dept && amt > 0) {
-        entries.push({ department: dept, amount: amt, note: entry.note || '' });
+        entries.push({ department: dept, amount: amt, splitType, note: entry.note || '' });
       }
     }
   }
@@ -585,7 +618,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
   approvedExpenseDetails
     .flatMap((item) => {
       const splits = extractExpenseDeptSplits(item);
-      const baseAmount = toAmount(firstValue(item, ['base_currency_amount', 'amount_rmb', 'amount'], ''));
+      const baseAmount = toAmount(firstValue(item, ['base_currency_amount', 'detail_summary_amount', 'amount_rmb', 'amount', 'source_amount', 'total_amount'], ''));
       const month = firstValue(item, ['query_month'], formatMonth(item.source_created_at || item.request_date || item.approval_completed_at));
 
       if (splits.length === 0) {
@@ -607,27 +640,22 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
         }];
       }
 
-      // 有部门拆分：按占比展开为多行
-      const splitTotal = splits.reduce((sum, e) => sum + e.amount, 0);
-      return splits.map((entry) => {
-        const ratio = splitTotal > 0 ? entry.amount / splitTotal : 0;
-        const splitAmount = baseAmount * ratio;
-        return {
-          expenseKind: expenseKindLabel(item.expense_kind),
-          department: entry.department,
-          month,
-          businessId: item.business_id,
-          title: item.title,
-          amount: splitAmount,
-          baseCurrencyAmount: splitAmount,
-          approvalStatus: item.approval_status,
-          requestDate: formatDate(item.request_date),
-          sourceCreatedAt: formatDate(item.source_created_at),
-          approvalCompletedAt: formatDate(item.approval_completed_at),
-          bizAction: item.biz_action,
-          splitNote: `工资拆分自 ${item.business_id || ''}（原始总额 ${baseAmount.toFixed(2)}）`,
-        };
-      });
+      // 有部门拆分：直接使用 approval_expense_dept_split.amount，不再按原单总额二次分摊。
+      return splits.map((entry) => ({
+        expenseKind: expenseKindLabel(item.expense_kind),
+        department: entry.department,
+        month,
+        businessId: item.business_id,
+        title: item.title,
+        amount: entry.amount,
+        baseCurrencyAmount: entry.amount,
+        approvalStatus: item.approval_status,
+        requestDate: formatDate(item.request_date),
+        sourceCreatedAt: formatDate(item.source_created_at),
+        approvalCompletedAt: formatDate(item.approval_completed_at),
+        bizAction: item.biz_action,
+        splitNote: `${splitTypeLabel(entry.splitType)}拆分自 ${item.business_id || ''}${entry.note ? `：${entry.note}` : ''}`,
+      }));
     })
     .sort((a, b) => String(a.month).localeCompare(String(b.month)) || String(a.department).localeCompare(String(b.department)));
 
@@ -653,12 +681,18 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       nonProductionBudget: 0,
       operationApproved: 0,
       purchaseApproved: 0,
+      managementApproved: 0,
+      salaryApproved: 0,
+      officeApproved: 0,
       operationCount: 0,
       purchaseCount: 0,
     };
 
     current.operationApproved += toAmount(item.operationTotal);
     current.purchaseApproved += toAmount(item.purchaseTotal);
+    current.managementApproved += toAmount(item.managementTotal);
+    current.salaryApproved += toAmount(item.salaryTotal);
+    current.officeApproved += toAmount(item.officeTotal);
     current.operationCount += Number(item.operationCount || 0);
     current.purchaseCount += Number(item.purchaseCount || 0);
     grouped.set(key, current);
@@ -667,7 +701,10 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
   return [...grouped.values()]
     .map((row) => {
       const totalBudget = row.productionBudget + row.nonProductionBudget;
-      const totalApproved = row.operationApproved + row.purchaseApproved;
+      const classifiedApproved = row.managementApproved + row.salaryApproved + row.officeApproved;
+      const totalApproved = classifiedApproved > 0
+        ? classifiedApproved
+        : row.operationApproved + row.purchaseApproved;
       return {
         ...row,
         totalBudget,
@@ -809,7 +846,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const executionSheetRows = [
-    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '运营支出', '采购支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
+    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '办公场地支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
     ...executionRows.map((row, index) => [
       index + 1,
       row.deptName,
@@ -817,8 +854,9 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.productionBudget.toFixed(2),
       row.nonProductionBudget.toFixed(2),
       row.totalBudget.toFixed(2),
-      row.operationApproved.toFixed(2),
-      row.purchaseApproved.toFixed(2),
+      row.managementApproved.toFixed(2),
+      row.salaryApproved.toFixed(2),
+      row.officeApproved.toFixed(2),
       row.totalApproved.toFixed(2),
       row.remainingBudget.toFixed(2),
       row.executionRate,
@@ -838,8 +876,9 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['支出占比分类数', expenseShareRows.length],
     ['生产预算金额', sumRows(executionRows, 'productionBudget').toFixed(2)],
     ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
-    ['运营支出金额', sumRows(executionRows, 'operationApproved').toFixed(2)],
-    ['采购支出金额', sumRows(executionRows, 'purchaseApproved').toFixed(2)],
+    ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
+    ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
+    ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
     ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
     ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
   ];
