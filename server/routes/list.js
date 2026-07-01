@@ -48,10 +48,6 @@ function formatMonth(value) {
 }
 
 const budgetMonthExpr = "COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, ''))";
-// 按部门+预算月份去重，每组合保留最新一条
-const dedupKey = `${budgetMonthExpr}, dept_name`;
-// 已撤销/已驳回的记录不在报表中显示
-const activeStatusFilter = "AND status IN ('审批中', '已通过')";
 
 function appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate) {
   const startMonth = formatMonth(startDate);
@@ -373,7 +369,6 @@ router.get('/production', async (req, res) => {
 
     ({ whereClause, paramIndex } = appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate));
 
-    whereClause += ` ${activeStatusFilter}`;
 
     if (status) {
       whereClause += ` AND status = $${paramIndex}`;
@@ -444,7 +439,6 @@ router.get('/non-production', async (req, res) => {
 
     ({ whereClause, paramIndex } = appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate));
 
-    whereClause += ` ${activeStatusFilter}`;
 
     if (status) {
       whereClause += ` AND status = $${paramIndex}`;
@@ -585,7 +579,6 @@ router.get('/report', async (req, res) => {
       paramIndex++;
     }
 
-    whereClause += ` ${activeStatusFilter}`;
 
     const exportClient = new Client({
       host: process.env.PGHOST,

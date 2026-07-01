@@ -142,22 +142,41 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
 
   const approvalState = getApprovalState(detail);
   if (!approvalState.approved) {
-    const logLabel = approvalState.retryable ? 'Pending instance' : 'Skip instance';
-    console.log(`[SYNC] ${logLabel}: ${processInstanceId}, ${approvalState.reason}`);
+    // 未审批的也入库（显示为审批中/已撤销等），但标注为 pending
+    const formNo = detail.businessId;
+    const budgetType = getBudgetType(detail);
+    const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
+
+    if (!isBudgetRequest(detail)) {
+      console.log(`[SYNC] Skip expense pending: ${formNo}`);
+      return {
+        success: true, synced: 0, added: 0, updated: 0, existing: 0,
+        pending: approvalState.retryable ? 1 : 0, skipped: approvalState.retryable ? 0 : 1,
+        reason: `Expense pending skipped: ${formNo}`,
+      };
+    }
+
+    const existCheck = await query(`SELECT id, status FROM ${tableName} WHERE form_no = $1 LIMIT 1`, [formNo]);
+    const dingtalkStatus = getStatusFromData(detail);
+
+    if (existCheck.rows.length > 0) {
+      if (existCheck.rows[0].status !== dingtalkStatus) {
+        await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
+        console.log(`[SYNC] Pending status updated: ${formNo}, ${existCheck.rows[0].status} -> ${dingtalkStatus}`);
+      }
+      return {
+        success: true, synced: 0, added: 0, updated: 1, existing: 0,
+        pending: 0, skipped: 0, processInstanceId, formNo,
+        message: `Pending record updated: status=${dingtalkStatus}`,
+      };
+    }
+
+    await insertRecord(processInstanceId, detail, budgetType);
+    console.log(`[SYNC] Pending inserted: ${formNo}, status=${dingtalkStatus}`);
     return {
-      success: true,
-      synced: 0,
-      added: 0,
-      updated: 0,
-      existing: 0,
-      pending: approvalState.retryable ? 1 : 0,
-      skipped: approvalState.retryable ? 0 : 1,
-      processInstanceId,
-      status: detail.status,
-      result: detail.result,
-      message: approvalState.retryable
-        ? `Instance pending: ${approvalState.reason}`
-        : `Instance skipped: ${approvalState.reason}`,
+      success: true, synced: 1, added: 1, updated: 0, existing: 0,
+      pending: 0, skipped: 0, processInstanceId, formNo,
+      message: `Pending record inserted: status=${dingtalkStatus}`,
     };
   }
 
