@@ -74,10 +74,20 @@ function getFormValue(formValues, keywords) {
 }
 
 function getStatus(dingtalkData) {
-  if (dingtalkData.status !== 'COMPLETED') return '审批中';
-  if (dingtalkData.result === 'agree') return '已通过';
-  if (dingtalkData.result === 'refuse' || dingtalkData.result === 'reject') return '已拒绝';
-  return '已撤回';
+  const statusStr = String(dingtalkData.status || '').toUpperCase();
+  const resultStr = String(dingtalkData.result || '').toLowerCase();
+
+  // 驳回优先
+  if (resultStr === 'refuse' || resultStr === 'reject') return '已驳回';
+
+  // COMPLETED + agree → 已通过
+  if (statusStr === 'COMPLETED' && resultStr === 'agree') return '已通过';
+
+  // TERMINATED / CANCELLED → 已撤销（含 TERMINATED+agree+finishTime 的特殊情况）
+  if (statusStr === 'TERMINATED' || statusStr === 'CANCELLED' || statusStr === 'CANCELED') return '已撤销';
+
+  // NEW / RUNNING / 其他 → 审批中
+  return '审批中';
 }
 
 function toMonthValue(value) {
@@ -205,6 +215,26 @@ function parseNonProductionRow(row, kind) {
 
   item.amount = item.rmb_amount || item.amount || item.original_amount || 0;
   return item;
+}
+
+export function hasBudgetDetailItems(dingtalkData, budgetType = getBudgetType(dingtalkData)) {
+  if (budgetType === 'production') {
+    return parseMaterialItems(dingtalkData).length > 0 ||
+      parseProductionItems(dingtalkData).length > 0 ||
+      parseLaborItems(dingtalkData).length > 0;
+  }
+
+  return parseHrItems(dingtalkData).length > 0 ||
+    parseOfficeItems(dingtalkData).length > 0 ||
+    parseOperationItems(dingtalkData).length > 0;
+}
+
+/** 判断是否为预算申请单（排除运营/采购支出等无预算明细流程） */
+export function isBudgetRequest(dingtalkData) {
+  const title = String(dingtalkData.title || '').toLowerCase();
+  if (title.includes('gastos de operación') || title.includes('运营支出')) return false;
+  if (title.includes('purchase') || title.includes('采购支出')) return false;
+  return hasBudgetDetailItems(dingtalkData);
 }
 
 export function getBudgetType(dingtalkData) {

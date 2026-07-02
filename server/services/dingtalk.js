@@ -8,7 +8,10 @@ const LIST_API_MODE = process.env.DINGTALK_LIST_API || 'old';
 const REQUEST_DELAY_MS = Number(process.env.DINGTALK_REQUEST_DELAY_MS || 300);
 const AXIOS_TIMEOUT_MS = Number(process.env.DINGTALK_TIMEOUT_MS || 15000);
 
-const http = axios.create({ timeout: AXIOS_TIMEOUT_MS });
+const http = axios.create({
+  timeout: AXIOS_TIMEOUT_MS,
+  proxy: process.env.DINGTALK_DISABLE_PROXY === '0' ? undefined : false,
+});
 
 // Circuit breakers for DingTalk API groups
 const tokenCircuit = createCircuitBreaker({ label: 'dingtalk-token', failureThreshold: 3, resetTimeoutMs: 30000 });

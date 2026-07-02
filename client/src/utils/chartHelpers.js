@@ -10,6 +10,15 @@ const canonicalDeptName = (value) => {
   const name = normalizeDeptName(value) || '未知';
   const key = compactDeptKey(name);
 
+  if (
+    key.includes('悦为智能') ||
+    key.includes('ywtechai') ||
+    (key.includes('it') && key.includes('sc') && key.includes('信息技术')) ||
+    (key.includes('it') && key.includes('sc') && key.includes('tecnolog') && key.includes('control'))
+  ) {
+    return 'IT&SC 信息技术和体系管理Tecnologías de la información y control';
+  }
+
   if (key.includes('财务中心') || key.includes('centrodefinanzas')) {
     return 'FC CN财务中心 Centro de finanzas';
   }
@@ -183,7 +192,7 @@ export function buildExecutionRateData(executionRows) {
 }
 
 /**
- * 部门预算 vs 已审批对比，用于分组柱状图
+ * 部门预算 vs 支出对比，用于分组柱状图
  * 返回格式: [{ deptName, budget, approved }]
  */
 export function buildDeptApprovedComparison(executionRows) {

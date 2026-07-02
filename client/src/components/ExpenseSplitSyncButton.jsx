@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { syncData } from '../api';
+import { syncExpenseSplits } from '../api';
 
 const styles = {
   container: {
@@ -14,11 +14,11 @@ const styles = {
     padding: '0 16px',
     borderWidth: '1px',
     borderStyle: 'solid',
-    borderColor: '#059669',
+    borderColor: '#2563eb',
     borderRadius: '6px',
     fontSize: '14px',
     cursor: 'pointer',
-    background: '#059669',
+    background: '#2563eb',
     color: '#fff',
   },
   disabledButton: {
@@ -48,7 +48,21 @@ function toDayEndTimestamp(date) {
   return new Date(`${date}T23:59:59`).getTime();
 }
 
-export default function SyncButton({ startDate, endDate, onSyncComplete }) {
+function buildMessage(result) {
+  const data = result?.data || result;
+  if (!data) return result?.message || '支出拆分同步完成';
+
+  const matched = Number(data.matched || 0);
+  const written = Number(data.written || 0);
+  const failed = Number(data.failed || 0);
+  const splitCounts = data.splitCounts || {};
+  const salary = Number(splitCounts.salary || 0);
+  const insurance = Number(splitCounts.social_insurance || 0);
+  const office = Number(splitCounts.office_space || 0);
+  return `支出拆分同步完成：匹配 ${matched}，写入 ${written}，失败 ${failed}；工资 ${salary}，社保 ${insurance}，办公场地 ${office}`;
+}
+
+export default function ExpenseSplitSyncButton({ startDate, endDate, onSyncComplete }) {
   const [loading, setLoading] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [message, setMessage] = useState('');
@@ -62,17 +76,16 @@ export default function SyncButton({ startDate, endDate, onSyncComplete }) {
     setIsError(false);
 
     try {
-      const result = await syncData(
+      const result = await syncExpenseSplits(
         toDayStartTimestamp(startDate),
-        toDayEndTimestamp(endDate),
-        { refreshExisting: true, syncExpenses: true }
+        toDayEndTimestamp(endDate)
       );
       setLastSync(new Date());
-      setMessage(result.message || '同步完成');
+      setMessage(buildMessage(result));
       if (onSyncComplete) onSyncComplete(result);
     } catch (error) {
       setIsError(true);
-      setMessage(`同步失败：${error.response?.data?.message || error.message || '未知错误'}`);
+      setMessage(`支出拆分同步失败：${error.response?.data?.message || error.message || '未知错误'}`);
     } finally {
       setLoading(false);
     }
@@ -88,7 +101,7 @@ export default function SyncButton({ startDate, endDate, onSyncComplete }) {
         onClick={handleSync}
         disabled={loading}
       >
-        {loading ? '更新中...' : '手动更新数据'}
+        {loading ? '同步中...' : '同步支出拆分'}
       </button>
       {lastSync && (
         <span style={styles.info}>

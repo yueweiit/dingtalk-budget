@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import DateFilter from '../components/DateFilter';
+import SyncButton from '../components/SyncButton';
+import ExpenseSplitSyncButton from '../components/ExpenseSplitSyncButton';
+import ReactEChartsCore from 'echarts-for-react/lib/core';
+import * as echarts from 'echarts';
 
 import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
@@ -23,6 +27,14 @@ const styles = {
     alignItems: 'flex-start',
     gap: '16px',
     marginBottom: '20px',
+  },
+  headerActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    gap: '8px',
+    maxWidth: '100%',
   },
   eyebrow: {
     margin: '0 0 6px',
@@ -216,7 +228,7 @@ const styles = {
   modalContent: {
     background: '#fff',
     borderRadius: '8px',
-    width: 'min(920px, 100%)',
+    width: 'min(1120px, 100%)',
     maxHeight: '90vh',
     overflow: 'auto',
     border: '1px solid #e5e7eb',
@@ -270,6 +282,80 @@ const styles = {
     fontSize: '14px',
     wordBreak: 'break-all',
   },
+  expenseDetails: {
+    marginTop: '16px',
+    display: 'grid',
+    gap: '12px',
+  },
+  expenseDetailSection: {
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    overflow: 'hidden',
+    background: '#fff',
+  },
+  expenseDetailHeader: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '10px 12px',
+    background: '#f9fafb',
+    borderBottom: '1px solid #e5e7eb',
+  },
+  expenseDetailTitle: {
+    margin: 0,
+    fontSize: '14px',
+    fontWeight: 700,
+    color: '#374151',
+  },
+  expenseDetailSummary: {
+    fontSize: '13px',
+    fontWeight: 700,
+    color: '#16a34a',
+  },
+  expenseDetailTableWrap: {
+    overflowX: 'auto',
+  },
+  expenseDetailTable: {
+    width: '100%',
+    minWidth: '940px',
+    borderCollapse: 'collapse',
+  },
+  expenseDetailTh: {
+    padding: '9px 10px',
+    textAlign: 'left',
+    fontSize: '12px',
+    fontWeight: 600,
+    color: '#6b7280',
+    background: '#fff',
+    borderBottom: '1px solid #f3f4f6',
+    whiteSpace: 'nowrap',
+  },
+  expenseDetailTd: {
+    padding: '10px',
+    fontSize: '12px',
+    color: '#374151',
+    borderBottom: '1px solid #f3f4f6',
+    verticalAlign: 'top',
+  },
+  expenseDetailText: {
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
+    lineHeight: 1.5,
+  },
+  expenseDetailAmount: {
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
+    fontWeight: 700,
+    color: '#16a34a',
+  },
+  expenseDetailEmpty: {
+    padding: '18px 12px',
+    textAlign: 'center',
+    fontSize: '13px',
+    color: '#9ca3af',
+  },
 };
 
 const tabs = [
@@ -294,10 +380,380 @@ const displayValue = (value) => {
   return value;
 };
 
+const monthStart = (value = dayjs()) => dayjs(value).startOf('month').format('YYYY-MM-DD');
+const monthEnd = (value = dayjs()) => dayjs(value).endOf('month').format('YYYY-MM-DD');
+const displayMonth = (startDate, endDate) => {
+  const startMonth = startDate ? dayjs(startDate).format('YYYY-MM') : '';
+  const endMonth = endDate ? dayjs(endDate).format('YYYY-MM') : '';
+  if (startMonth && startMonth === endMonth) return startMonth;
+  return startMonth || endMonth || '不限';
+};
+
+function toNum(v) { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; }
+function fmtWan(v) { const n = toNum(v); return n >= 10000 ? '¥' + (n / 10000).toFixed(2) + '万' : '¥' + n.toFixed(2); }
+function firstNonEmpty(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '') || '';
+}
+
+function compactDeptKey(value) {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s()（）\-_/\\,.;:，。；：&]+/g, '');
+  if (
+    key.includes('悦为智能') ||
+    key.includes('ywtechai') ||
+    (key.includes('it') && key.includes('sc') && key.includes('信息技术')) ||
+    (key.includes('it') && key.includes('sc') && key.includes('tecnolog') && key.includes('control'))
+  ) {
+    return 'dept_yw_tech_ai';
+  }
+  if (key.includes('pdpm') || key.includes('产品和生产管理')) {
+    return 'dept_pdpm_product_management';
+  }
+  return key;
+}
+
+function detailMonthOf(item) {
+  if (item?.query_month) return String(item.query_month).trim();
+  const date = firstNonEmpty(item?.source_created_at, item?.request_date, item?.approval_completed_at);
+  if (!date) return '';
+  const parsed = dayjs(date);
+  return parsed.isValid() ? parsed.format('YYYY-MM') : '';
+}
+
+function detailDepartmentOf(item) {
+  return firstNonEmpty(
+    item?.department_resolved,
+    item?.applicant_department,
+    item?.creator_department,
+    item?.query_department
+  );
+}
+
+function detailAmountOf(item) {
+  return toNum(firstNonEmpty(
+    item?.base_currency_amount,
+    item?.detail_summary_amount,
+    item?.amount,
+    item?.source_amount,
+    item?.total_amount
+  ));
+}
+
+function splitTypeLabel(value) {
+  const type = String(value || '').trim().toLowerCase();
+  if (type === 'salary') return '工资';
+  if (type === 'social_insurance') return '社保公积金';
+  if (type === 'office_space') return '办公场地';
+  return value || '部门拆分';
+}
+
+function expenseKindLabel(value) {
+  if (value === 'operation') return '运营支出';
+  if (value === 'purchase') return '采购支出';
+  return value || '支出';
+}
+
+function sectionKeyForSplit(splitType) {
+  const type = String(splitType || '').trim().toLowerCase();
+  if (type === 'salary' || type === 'social_insurance') return 'salary';
+  if (type === 'office_space') return 'office';
+  return 'operationPurchase';
+}
+
+function extractDetailSplits(item) {
+  const dbSplits = item?.expense_splits || item?.expenseSplits;
+  if (Array.isArray(dbSplits)) {
+    return dbSplits
+      .map((entry) => ({
+        department: firstNonEmpty(entry.department, entry.dept_name),
+        amount: toNum(entry.amount),
+        splitType: entry.split_type || entry.splitType || '',
+        note: entry.note || '',
+      }))
+      .filter((entry) => entry.department && entry.amount > 0);
+  }
+
+  const splitColumns = [
+    { col: 'salary_by_department', splitType: 'salary' },
+    { col: 'social_insurance_by_department', splitType: 'social_insurance' },
+    { col: 'office_space_by_department', splitType: 'office_space' },
+  ];
+  const rows = [];
+
+  for (const { col, splitType } of splitColumns) {
+    const entries = item?.[col];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const department = firstNonEmpty(entry.department, entry.dept_name);
+      const amount = toNum(entry.amount);
+      if (department && amount > 0) {
+        rows.push({ department, amount, splitType, note: entry.note || '' });
+      }
+    }
+  }
+
+  return rows;
+}
+
+function expenseDetailBase(item) {
+  return {
+    date: firstNonEmpty(item?.source_created_at, item?.request_date, item?.approval_completed_at),
+    businessId: item?.business_id || '',
+    title: item?.title || '',
+    description: firstNonEmpty(item?.matter_description, item?.title),
+  };
+}
+
+function directExpenseDetailRow(item, amount, note = '') {
+  return {
+    ...expenseDetailBase(item),
+    amount,
+    expenseType: firstNonEmpty(
+      item?.purchase_expense,
+      item?.operation_expense,
+      item?.expense_type,
+      expenseKindLabel(item?.expense_kind)
+    ),
+    note,
+  };
+}
+
+function splitExpenseDetailRow(item, split) {
+  const label = splitTypeLabel(split.splitType);
+  return {
+    ...expenseDetailBase(item),
+    amount: split.amount,
+    expenseType: label,
+    note: firstNonEmpty(split.note, `${label}拆分`),
+  };
+}
+
+function buildExpenseDetailSections(rawDetails, deptName, budgetMonth) {
+  const targetDeptKey = compactDeptKey(deptName);
+  const sections = {
+    operationPurchase: [],
+    salary: [],
+    office: [],
+  };
+
+  if (!targetDeptKey || !budgetMonth) return sections;
+
+  for (const item of rawDetails || []) {
+    if (detailMonthOf(item) !== budgetMonth) continue;
+
+    const amount = detailAmountOf(item);
+    if (amount <= 0) continue;
+
+    const directDeptKey = compactDeptKey(detailDepartmentOf(item));
+    const splits = extractDetailSplits(item);
+
+    if (splits.length > 0) {
+      const splitTotal = splits.reduce((sum, split) => sum + toNum(split.amount), 0);
+
+      for (const split of splits) {
+        if (compactDeptKey(split.department) !== targetDeptKey) continue;
+        const sectionKey = sectionKeyForSplit(split.splitType);
+        sections[sectionKey].push(splitExpenseDetailRow(item, split));
+      }
+
+      const remainder = Number((amount - splitTotal).toFixed(2));
+      if (remainder > 0.01 && directDeptKey === targetDeptKey) {
+        sections.operationPurchase.push(directExpenseDetailRow(item, remainder, '未拆分余额'));
+      }
+      continue;
+    }
+
+    if (directDeptKey !== targetDeptKey) continue;
+    sections.operationPurchase.push(directExpenseDetailRow(item, amount));
+  }
+
+  for (const rows of Object.values(sections)) {
+    rows.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.businessId).localeCompare(String(b.businessId)));
+  }
+
+  return sections;
+}
+
+function expenseBreakdownFromSections(sections) {
+  const operationPurchaseRows = sections?.operationPurchase || [];
+  const salaryRows = sections?.salary || [];
+  const officeRows = sections?.office || [];
+  const management = operationPurchaseRows.reduce((sum, row) => sum + toNum(row.amount), 0);
+  const salary = salaryRows.reduce((sum, row) => sum + toNum(row.amount), 0);
+  const office = officeRows.reduce((sum, row) => sum + toNum(row.amount), 0);
+
+  return {
+    operation: management,
+    purchase: 0,
+    management,
+    salary,
+    office,
+    total: management + salary + office,
+    rowCount: operationPurchaseRows.length + salaryRows.length + officeRows.length,
+  };
+}
+
+function computeBudgetBreakdown(detail) {
+  if (detail?.budget_breakdown || detail?.budgetBreakdown) {
+    const breakdown = detail.budget_breakdown || detail.budgetBreakdown;
+    const hr = toNum(breakdown.hr ?? breakdown.salary);
+    const office = toNum(breakdown.office);
+    const operation = toNum(breakdown.management ?? breakdown.operation);
+    const total = toNum(breakdown.total) || hr + office + operation;
+    return { hr, office, operation, total };
+  }
+
+  const hr = (detail?.hr_items || detail?.hrItems || []).reduce((s, x) => s + toNum(x.amount), 0);
+  const office = (detail?.office_items || detail?.officeItems || []).reduce((s, x) => s + toNum(x.amount), 0);
+  const operation = (detail?.operation_items || detail?.operationItems || []).reduce((s, x) => s + toNum(x.amount), 0);
+  const total = hr + office + operation || toNum(detail?.total_amount || detail?.budget_amount || 0);
+  // If no detail items, use total_amount
+  if (hr === 0 && office === 0 && operation === 0) {
+    const t = toNum(detail?.total_amount || detail?.budget_amount || detail?.monthly_budget_amount || 0);
+    return { hr: 0, office: 0, operation: t, total: t };
+  }
+  return { hr, office, operation, total };
+}
+
+function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
+  if (Array.isArray(rawDetails) && rawDetails.length > 0) {
+    const sectionBreakdown = expenseBreakdownFromSections(buildExpenseDetailSections(rawDetails, deptName, budgetMonth));
+    if (sectionBreakdown.rowCount > 0) return sectionBreakdown;
+  }
+
+  if (detail?.expense_breakdown || detail?.expenseBreakdown) {
+    const breakdown = detail.expense_breakdown || detail.expenseBreakdown;
+    const operation = toNum(breakdown.operation);
+    const purchase = toNum(breakdown.purchase);
+    const salary = toNum(breakdown.salary);
+    const office = toNum(breakdown.office);
+    const management = toNum(breakdown.management);
+    const total = toNum(breakdown.total) || management + salary + office;
+    return {
+      operation,
+      purchase,
+      salary,
+      office,
+      total,
+      management: management || operation + purchase,
+    };
+  }
+
+  const key = compactDeptKey(deptName);
+  let operationExp = 0, purchaseExp = 0, salaryExp = 0, officeExp = 0;
+
+  for (const item of rawDetails || []) {
+    const itemMonth = item.query_month || '';
+    if (itemMonth !== budgetMonth) continue;
+
+    const dbSplits = item.expense_splits || item.expenseSplits;
+    if (Array.isArray(dbSplits) && dbSplits.length > 0) {
+      for (const entry of dbSplits) {
+        if (compactDeptKey(entry.department) !== key) continue;
+        const amt = toNum(entry.amount);
+        const splitType = String(entry.split_type || entry.splitType || '').toLowerCase();
+        if (splitType === 'salary' || splitType === 'social_insurance') salaryExp += amt;
+        if (splitType === 'office_space') officeExp += amt;
+      }
+      continue;
+    }
+
+    // 从 salary/office 拆分列提取该部门的份额
+    const splits = [
+      { col: 'salary_by_department', target: 'salary' },
+      { col: 'social_insurance_by_department', target: 'salary' },
+      { col: 'office_space_by_department', target: 'office' },
+    ];
+    for (const s of splits) {
+      const entries = item[s.col];
+      if (!Array.isArray(entries)) continue;
+      for (const e of entries) {
+        if (compactDeptKey(e.department) === key) {
+          const amt = toNum(e.amount);
+          if (s.target === 'salary') salaryExp += amt;
+          else officeExp += amt;
+        }
+      }
+    }
+
+    // 非拆分的按部门直接归入 operation/purchase
+    const itemDept = compactDeptKey(item.department_resolved || item.applicant_department || '');
+    if (itemDept !== key) continue;
+    const amt = toNum(item.base_currency_amount);
+    if (item.expense_kind === 'purchase') {
+      purchaseExp += amt;
+    } else {
+      operationExp += amt;
+    }
+  }
+
+  return {
+    operation: operationExp,
+    purchase: purchaseExp,
+    salary: salaryExp,
+    office: officeExp,
+    total: operationExp + purchaseExp + salaryExp + officeExp,
+    management: operationExp + purchaseExp,
+  };
+}
+
+function ExpenseDetailSection({ title, rows = [] }) {
+  const total = (rows || []).reduce((sum, row) => sum + toNum(row.amount), 0);
+
+  return (
+    <section style={styles.expenseDetailSection}>
+      <div style={styles.expenseDetailHeader}>
+        <h4 style={styles.expenseDetailTitle}>{title}</h4>
+        <span style={styles.expenseDetailSummary}>{rows.length} 条 / {fmtWan(total)}</span>
+      </div>
+      {rows.length === 0 ? (
+        <div style={styles.expenseDetailEmpty}>暂无明细</div>
+      ) : (
+        <div style={styles.expenseDetailTableWrap}>
+          <table style={styles.expenseDetailTable}>
+            <thead>
+              <tr>
+                <th style={styles.expenseDetailTh}>日期</th>
+                <th style={styles.expenseDetailTh}>业务编号</th>
+                <th style={styles.expenseDetailTh}>支出类型</th>
+                <th style={styles.expenseDetailTh}>事项/说明</th>
+                <th style={{ ...styles.expenseDetailTh, textAlign: 'right' }}>金额</th>
+                <th style={styles.expenseDetailTh}>备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={`${row.businessId || 'expense'}-${index}`}>
+                  <td style={{ ...styles.expenseDetailTd, whiteSpace: 'nowrap' }}>{formatDateTime(row.date)}</td>
+                  <td style={{ ...styles.expenseDetailTd, whiteSpace: 'nowrap' }}>{displayValue(row.businessId)}</td>
+                  <td style={{ ...styles.expenseDetailTd, minWidth: 130 }}>{displayValue(row.expenseType)}</td>
+                  <td style={{ ...styles.expenseDetailTd, ...styles.expenseDetailText, minWidth: 280 }}>{displayValue(row.description)}</td>
+                  <td style={{ ...styles.expenseDetailTd, ...styles.expenseDetailAmount }}>{fmtWan(row.amount)}</td>
+                  <td style={{ ...styles.expenseDetailTd, ...styles.expenseDetailText, minWidth: 150 }}>{displayValue(row.note)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function downloadCSV(rows, filename) {
+  const BOM = '﻿';
+  const csv = BOM + rows.map(r => r.map(c => '"' + String(c || '').replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+
 export default function BudgetList({ onGoToVisual }) {
   const [activeTab, setActiveTab] = useState('production');
-  const [startDate, setStartDate] = useState(dayjs().subtract(30, 'day').format('YYYY-MM-DD'));
-  const [endDate, setEndDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [startDate, setStartDate] = useState(monthStart());
+  const [endDate, setEndDate] = useState(monthEnd());
   const [data, setData] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -306,7 +762,10 @@ export default function BudgetList({ onGoToVisual }) {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
+  const [detailExpense, setDetailExpense] = useState(null);
+  const [detailExpenseRaw, setDetailExpenseRaw] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const chartRef = useRef(null);
 
   const activeTitle = useMemo(
     () => tabs.find((tab) => tab.key === activeTab)?.label || '预算',
@@ -356,6 +815,15 @@ export default function BudgetList({ onGoToVisual }) {
     fetchData();
   };
 
+  const handleSyncComplete = () => {
+    fetchStats();
+    if (page === 1) {
+      fetchData();
+    } else {
+      setPage(1);
+    }
+  };
+
   const handleExport = async () => {
     if (exporting) return;
 
@@ -367,7 +835,7 @@ export default function BudgetList({ onGoToVisual }) {
         reportStartDate: startDate,
         reportEndDate: endDate,
       });
-      const filename = `预算报表_${startDate || '开始'}_${endDate || '结束'}.xlsx`;
+      const filename = `预算报表_${displayMonth(startDate, endDate)}.xlsx`;
       saveWorkbook(workbook, filename);
     } catch (error) {
       console.error('Export report error:', error);
@@ -379,10 +847,17 @@ export default function BudgetList({ onGoToVisual }) {
 
   const handleOpenDetail = async (item) => {
     setDetailItem(item);
+    setDetailExpense(null);
     try {
-      const type = activeTab === 'production' ? 'production' : 'non-production';
-      const detail = await getBudgetDetail(item.form_no, type);
-      setDetailItem({ ...item, ...detail });
+      const bm = item.budget_month || item.declaration_month || '';
+      // 用 report 接口获取完整明细（含 hr_items/office_items/operation_items）
+      const rpt = await getReportData({ startDate: bm, endDate: bm, includeApproved: 1 });
+      // 从 nonProduction 中找到匹配的 form_no
+      const records = activeTab === 'production' ? (rpt.data?.production || []) : (rpt.data?.nonProduction || []);
+      const detail = records.find(r => r.form_no === item.form_no) || item;
+      setDetailItem(detail);
+      setDetailExpense(rpt.data?.approvedExpenses || []);
+      setDetailExpenseRaw(rpt.data?.approvedExpenseDetails || []);
     } catch (error) {
       console.error('Fetch detail error:', error);
       setDetailItem(item);
@@ -399,10 +874,21 @@ export default function BudgetList({ onGoToVisual }) {
             <p style={styles.eyebrow}>DingTalk Budget</p>
             <h1 style={styles.title}>预算管理系统</h1>
             <p style={styles.subtitle}>
-              当前筛选：{startDate || '不限'} 至 {endDate || '不限'}，{activeTitle} 共 {total} 条
+              当前月份：{displayMonth(startDate, endDate)}，{activeTitle} 共 {total} 条
             </p>
           </div>
-
+          <div style={styles.headerActions}>
+            <ExpenseSplitSyncButton
+              startDate={startDate}
+              endDate={endDate}
+              onSyncComplete={handleSyncComplete}
+            />
+            <SyncButton
+              startDate={startDate}
+              endDate={endDate}
+              onSyncComplete={handleSyncComplete}
+            />
+          </div>
         </div>
 
         <div style={styles.stats}>
@@ -482,6 +968,7 @@ export default function BudgetList({ onGoToVisual }) {
                       <th style={styles.th}>执行地区</th>
                       <th style={styles.th}>状态</th>
                       <th style={styles.th}>预算金额（元）</th>
+                      <th style={styles.th}>支出金额（元）</th>
                       <th style={styles.th}>创建时间</th>
                       <th style={{ ...styles.th, minWidth: 160 }}>操作</th>
                     </tr>
@@ -503,13 +990,24 @@ export default function BudgetList({ onGoToVisual }) {
                         <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
                           {item.status === '已通过' ? Number(item.total_amount || 0).toFixed(2) : '-'}
                         </td>
+                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
+                          {item.status === '已通过' ? Number(item.approved_amount || 0).toFixed(2) : '-'}
+                        </td>
                         <td style={styles.td}>{formatDateTime(item.create_time)}</td>
                         <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
                           <button style={styles.detailButton} onClick={() => handleOpenDetail(item)}>
                             详情
                           </button>
                           <button
-                            style={{ ...styles.detailButton, marginLeft: 6, borderColor: '#d1d5db', color: '#6b7280' }}
+                            style={{
+                              ...styles.detailButton,
+                              marginLeft: 6,
+                              borderColor: '#d1d5db',
+                              color: '#6b7280',
+                              opacity: item.process_instance_id ? 1 : 0.45,
+                              cursor: item.process_instance_id ? 'pointer' : 'not-allowed',
+                            }}
+                            disabled={!item.process_instance_id}
                             onClick={() => {
                               const instId = item.process_instance_id;
                               if (!instId) return;
@@ -518,7 +1016,7 @@ export default function BudgetList({ onGoToVisual }) {
                               window.open(magicLink, '_blank');
                             }}
                           >
-                            钉钉原单
+                            {item.process_instance_id ? '钉钉原单' : '无原单'}
                           </button>
                         </td>
                       </tr>
@@ -579,6 +1077,119 @@ export default function BudgetList({ onGoToVisual }) {
                     </div>
                   ))}
                 </div>
+
+                {/* 预算与支出明细模块 */}
+                {detailExpenseRaw !== null && (() => {
+                  const budget = computeBudgetBreakdown(detailItem);
+                  const bm = detailItem.budget_month || detailItem.declaration_month || '';
+                  const expenseSections = buildExpenseDetailSections(detailExpenseRaw, detailItem.dept_name, bm);
+                  const sectionExpense = expenseBreakdownFromSections(expenseSections);
+                  const exp = sectionExpense.rowCount > 0
+                    ? sectionExpense
+                    : computeExpenseBreakdown(detailExpenseRaw, detailItem.dept_name, bm, detailItem);
+                  const remaining = budget.total - exp.total;
+
+                  const chartOption = {
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                    toolbox: { feature: { saveAsImage: { title: '保存图片' } }, right: 10 },
+                    grid: { top: 60, bottom: 40, left: 60, right: 20 },
+                    legend: { data: ['预算', '支出'], top: 10 },
+                    xAxis: { type: 'category', data: ['管理预算明细', '人资', '办公场地'] },
+                    yAxis: { type: 'value', axisLabel: { formatter: (v) => v >= 10000 ? (v/10000)+'万' : v } },
+                    series: [
+                      { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, budget.office], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                      { name: '支出', type: 'bar', color: '#52c41a', data: [exp.management, exp.salary, exp.office], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                    ],
+                  };
+
+                  const csvRows = [
+                    ['类别', '预算金额', '支出金额', '对比(预算-支出)'],
+                    ['管理预算明细', budget.operation.toFixed(2), exp.management.toFixed(2), (budget.operation - exp.management).toFixed(2)],
+                    ['人资', budget.hr.toFixed(2), exp.salary.toFixed(2), (budget.hr - exp.salary).toFixed(2)],
+                    ['办公场地', budget.office.toFixed(2), exp.office.toFixed(2), (budget.office - exp.office).toFixed(2)],
+                  ];
+
+                  return (
+                    <div style={{ marginTop: 20, borderTop: '1px solid #e5e7eb', paddingTop: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>预算与支出明细</h3>
+                        <div style={{ position: 'relative' }}>
+                          <button style={{ ...styles.detailButton, background: '#2563eb', color: '#fff', border: 'none' }}
+                            onClick={(e) => { const menu = e.currentTarget.nextSibling; menu.style.display = menu.style.display === 'none' ? 'block' : 'none'; }}>
+                            导出 ▾
+                          </button>
+                          <div style={{ display: 'none', position: 'absolute', right: 0, top: 34, background: '#fff', border: '1px solid #d1d5db', borderRadius: 6, boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 10, minWidth: 140 }}>
+                            <div style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f3f4f6' }}
+                              onClick={() => {
+                                const chart = chartRef.current?.getEchartsInstance?.();
+                                if (chart) { const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' }); const a = document.createElement('a'); a.href = url; a.download = (detailItem.form_no || 'chart') + '.png'; a.click(); }
+                              }}>导出图表图片</div>
+                            <div style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 13 }}
+                              onClick={() => downloadCSV(csvRows, (detailItem.form_no || 'detail') + '.csv')}>导出 Excel/CSV</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 六列卡片 */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
+                        <div style={{ background: '#e6f0ff', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb', marginBottom: 4 }}>管理预算明细</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.operation)}</div>
+                        </div>
+                        <div style={{ background: '#e6f0ff', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb', marginBottom: 4 }}>人资预算</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.hr)}</div>
+                        </div>
+                        <div style={{ background: '#e6f0ff', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb', marginBottom: 4 }}>办公场地预算</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.office)}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>管理支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.management)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>工资/公积金支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.salary)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>办公场地支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.office)}</div>
+                        </div>
+                      </div>
+
+                      {/* 图表 */}
+                      <div style={{ marginBottom: 16 }}>
+                        <ReactEChartsCore ref={chartRef} echarts={echarts} option={chartOption} style={{ height: 320 }} notMerge lazyUpdate />
+                      </div>
+
+                      {/* 底部汇总 */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                        <div style={{ background: '#e6f0ff', padding: 14, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#2f54eb' }}>总预算</div>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.total)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 14, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a' }}>总支出</div>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.total)}</div>
+                        </div>
+                        <div style={{ background: remaining < 0 ? '#fff1f0' : '#fff7e6', padding: 14, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: remaining < 0 ? '#cf1322' : '#d46b08' }}>剩余</div>
+                          <div style={{ fontSize: 24, fontWeight: 700, color: remaining < 0 ? '#cf1322' : '#d46b08' }}>{fmtWan(remaining)}</div>
+                        </div>
+                      </div>
+
+                      <div style={styles.expenseDetails}>
+                        <h3 style={{ margin: '4px 0 0', fontSize: 16, fontWeight: 600 }}>支出明细</h3>
+                        <ExpenseDetailSection title="运营/采购支出明细" rows={expenseSections.operationPurchase} />
+                        <ExpenseDetailSection title="工资/社保明细" rows={expenseSections.salary} />
+                        <ExpenseDetailSection title="办公场地明细" rows={expenseSections.office} />
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>

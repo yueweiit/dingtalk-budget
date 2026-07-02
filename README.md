@@ -124,6 +124,7 @@ Optional variables:
 | `DINGTALK_TIMEOUT_MS`   | `15000`              | DingTalk API timeout           |
 | `RETRY_COUNT`           | `3`                  | Max retry attempts             |
 | `CB_FAILURE_THRESHOLD`  | `5`                  | Failures before circuit opens  |
+| `EXPENSE_SYNC_URL`      | (empty)              | Optional expense sync service URL, e.g. `http://localhost:3002` |
 
 ### 3. Install Dependencies
 
@@ -151,7 +152,8 @@ Open http://localhost:5173 in your browser.
 
 | Method | Path                            | Description              |
 | ------ | ------------------------------- | ------------------------ |
-| POST   | `/api/sync`                     | Sync DingTalk data       |
+| POST   | `/api/sync`                     | Manually sync DingTalk budget data, refresh existing statuses, and optionally trigger expense sync |
+| POST   | `/api/sync/expense-splits`      | Sync operation expense split data (salary, social insurance, office space) through the expense service |
 | GET    | `/api/list/production`          | Production budget list   |
 | GET    | `/api/list/non-production`      | Non-production budget list |
 | GET    | `/api/list/stats`               | Dashboard statistics     |

@@ -1,19 +1,26 @@
 import express from 'express';
-import axios from 'axios';
 import pg from 'pg';
 import { query } from '../db/index.js';
-import { retry, createCircuitBreaker } from '../utils/resilience.js';
+import { getProcessInstanceDetail } from '../services/dingtalk.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
 const { Client } = pg;
 const isProduction = process.env.NODE_ENV === 'production';
-const YUNYING_API_BASE = process.env.YUNYING_API_BASE || 'http://localhost:3002';
-const YUNYING_TIMEOUT_MS = Number(process.env.YUNYING_TIMEOUT_MS || 15000);
-
-const yunyingCircuit = createCircuitBreaker({ label: 'yunying-api', failureThreshold: 3, resetTimeoutMs: 60000 });
+const APPROVAL_DB_DATABASE = process.env.APPROVAL_DB_DATABASE ||
+  process.env.DINGTALK_APPROVAL_DATABASE ||
+  'dingtalk_approval';
+const VERIFY_EXPENSE_STATUS_WITH_DINGTALK = process.env.VERIFY_EXPENSE_STATUS_WITH_DINGTALK === '1';
+const EXPENSE_STATUS_VERIFY_LIMIT = Number(process.env.EXPENSE_STATUS_VERIFY_LIMIT || 300);
+const EXPENSE_STATUS_CACHE_TTL_MS = Number(process.env.EXPENSE_STATUS_CACHE_TTL_MS || 10 * 60 * 1000);
+const EXPENSE_STATUS_VERIFY_CONCURRENCY = Number(process.env.EXPENSE_STATUS_VERIFY_CONCURRENCY || 8);
+const APPROVED_EXPENSE_CACHE_TTL_MS = Number(process.env.APPROVED_EXPENSE_CACHE_TTL_MS || 60 * 1000);
+const EXPENSE_SPLIT_CACHE_TTL_MS = Number(process.env.EXPENSE_SPLIT_CACHE_TTL_MS || 60 * 1000);
 
 const columnCache = new Map();
+const expenseStatusCache = new Map();
+const approvedExpenseSummaryCache = new Map();
+const expenseSplitCache = new Map();
 
 async function getExistingColumns(tableName) {
   if (columnCache.has(tableName)) {
@@ -47,6 +54,43 @@ function formatMonth(value) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+const budgetMonthExpr = "COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, ''))";
+
+function budgetMonthExprFor(alias) {
+  return `COALESCE(NULLIF(${alias}.budget_month, ''), NULLIF(${alias}.declaration_month, ''))`;
+}
+
+function deptPartitionExprFor(alias) {
+  const normalized = `LOWER(REGEXP_REPLACE(COALESCE(${alias}.dept_name, ''), '[\\s()（）\\-_/\\\\,.;:，。；：&]+', '', 'g'))`;
+  return `CASE
+    WHEN ${normalized} LIKE '%悦为智能%'
+      OR ${normalized} LIKE '%ywtechai%'
+      OR (${normalized} LIKE '%it%sc%' AND ${normalized} LIKE '%信息技术%')
+      OR (${normalized} LIKE '%it%sc%' AND ${normalized} LIKE '%tecnolog%' AND ${normalized} LIKE '%control%')
+    THEN 'dept_yw_tech_ai'
+    ELSE ${normalized}
+  END`;
+}
+
+function appendBudgetMonthRange(whereClause, params, paramIndex, startDate, endDate, monthExpr = budgetMonthExpr) {
+  const startMonth = formatMonth(startDate);
+  const endMonth = formatMonth(endDate);
+
+  if (startMonth) {
+    whereClause += ` AND ${monthExpr} >= $${paramIndex}`;
+    params.push(startMonth);
+    paramIndex++;
+  }
+
+  if (endMonth) {
+    whereClause += ` AND ${monthExpr} <= $${paramIndex}`;
+    params.push(endMonth);
+    paramIndex++;
+  }
+
+  return { whereClause, paramIndex };
+}
+
 function normalizeDept(value) {
   return String(value || '').trim();
 }
@@ -55,92 +99,1056 @@ function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '') || '';
 }
 
+/** 部门名归一化用于跨系统匹配：去掉标点空格、统一别名 */
+function compactDept(value) {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s()（）\-_/\\,.;:，。；：&]+/g, '');
+
+  if (
+    key.includes('悦为智能') ||
+    key.includes('ywtechai') ||
+    (key.includes('it') && key.includes('sc') && key.includes('信息技术')) ||
+    (key.includes('it') && key.includes('sc') && key.includes('tecnolog') && key.includes('control'))
+  ) {
+    return 'dept_yw_tech_ai';
+  }
+
+  return key;
+}
+
 function numberValue(value) {
   const number = Number(String(value ?? '').replace(/,/g, ''));
   return Number.isFinite(number) ? number : 0;
+}
+
+function budgetMonthOf(row) {
+  return String(row?.budget_month || row?.declaration_month || '').trim();
+}
+
+function sumItemsAmount(items) {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((sum, item) => sum + numberValue(item?.amount), 0);
+}
+
+function budgetBreakdownOf(row) {
+  const hr = numberValue(firstNonEmpty(row?.hr_budget, row?.hrBudget, sumItemsAmount(row?.hr_items || row?.hrItems)));
+  const office = numberValue(firstNonEmpty(row?.office_budget, row?.officeBudget, sumItemsAmount(row?.office_items || row?.officeItems)));
+  const management = numberValue(firstNonEmpty(row?.operation_budget, row?.operationBudget, sumItemsAmount(row?.operation_items || row?.operationItems)));
+  const detailTotal = hr + office + management;
+  const total = detailTotal || numberValue(firstNonEmpty(row?.total_amount, row?.budget_amount, row?.monthly_budget_amount));
+
+  return {
+    management: Number(management.toFixed(2)),
+    operation: Number(management.toFixed(2)),
+    hr: Number(hr.toFixed(2)),
+    salary: Number(hr.toFixed(2)),
+    office: Number(office.toFixed(2)),
+    total: Number(total.toFixed(2)),
+  };
+}
+
+function normalizeRegion(value) {
+  const text = String(value || '').trim();
+  const lower = text.toLowerCase();
+  if (text.includes('中国') || lower.includes('china') || /\bcn\b/i.test(text)) return 'CN';
+  if (text.includes('墨西哥') || lower.includes('méxico') || lower.includes('mexico') || /\bmx\b/i.test(text)) return 'MX';
+  return '';
+}
+
+function rowRegion(row) {
+  return normalizeRegion(row?.execution_region);
+}
+
+function expenseDepartment(item) {
+  return normalizeDept(firstNonEmpty(
+    item?.department_resolved,
+    item?.applicant_department,
+    item?.creator_department,
+    item?.query_department
+  ));
+}
+
+function expenseRegion(item) {
+  const text = [
+    item?.department_resolved,
+    item?.applicant_department,
+    item?.creator_department,
+    item?.query_department,
+    item?.title,
+  ].filter(Boolean).join(' ');
+  return normalizeRegion(text);
+}
+
+function isHrUnifiedExpense(item) {
+  if (item?.expense_kind !== 'operation') return false;
+  const text = [
+    item.department_resolved,
+    item.applicant_department,
+    item.creator_department,
+    item.query_department,
+    item.title,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes('hr cn') ||
+    text.includes('hrcn') ||
+    text.includes('hr mx') ||
+    text.includes('hrmx') ||
+    text.includes('人力资源') ||
+    text.includes('recursos humanos');
+}
+
+function splitExpenseCategory(splitType) {
+  const type = String(splitType || '').trim().toLowerCase();
+  if (type === 'salary' || type === 'social_insurance') return 'salary';
+  if (type === 'office' || type === 'office_space') return 'office';
+  return 'management';
+}
+
+function addDirectExpense(map, department, month, item, amount) {
+  const value = numberValue(amount);
+  if (value <= 0) return;
+  if (item?.expense_kind === 'purchase') {
+    addExpenseBreakdown(map, department, month, { purchase: value, management: value });
+    return;
+  }
+  // 工资/公积金与办公场地只认 approval_expense_dept_split.split_type。
+  // 没有拆分表明细的运营支出，按管理支出归属申请部门。
+  addExpenseBreakdown(map, department, month, { operation: value, management: value });
+}
+
+function addExpenseBreakdown(map, department, month, values = {}) {
+  const deptKey = compactDept(department);
+  if (!deptKey || !month) return;
+  const key = `${deptKey}__${month}`;
+  const current = map.get(key) || {
+    operation: 0,
+    purchase: 0,
+    salary: 0,
+    office: 0,
+    management: 0,
+  };
+  current.operation += numberValue(values.operation);
+  current.purchase += numberValue(values.purchase);
+  current.salary += numberValue(values.salary);
+  current.office += numberValue(values.office);
+  current.management += numberValue(values.management);
+  map.set(key, current);
+}
+
+async function fetchExpenseDeptSplits(details) {
+  const businessIds = [...new Set(
+    (details || [])
+      .map((item) => String(item.business_id || '').trim())
+      .filter(Boolean)
+  )].sort();
+  if (businessIds.length === 0) return [];
+  const cacheKey = businessIds.join('|');
+  const cached = expenseSplitCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < EXPENSE_SPLIT_CACHE_TTL_MS) {
+    return cached.value || cached.promise;
+  }
+
+  const client = new Client({
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    database: APPROVAL_DB_DATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 2000),
+  });
+
+  try {
+    await client.connect();
+    const promise = client.query(`
+      SELECT business_id, split_type, department, amount, note
+      FROM approval_expense_dept_split
+      WHERE business_id = ANY($1::varchar[])
+    `, [businessIds]);
+    expenseSplitCache.set(cacheKey, { cachedAt: Date.now(), promise: promise.then((result) => result.rows) });
+    const result = await promise;
+    expenseSplitCache.set(cacheKey, { cachedAt: Date.now(), value: result.rows });
+    return result.rows;
+  } catch (error) {
+    expenseSplitCache.delete(cacheKey);
+    console.warn('[WARN] Expense dept split unavailable:', error.message);
+    return [];
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+function embeddedExpenseSplitRows(details) {
+  return (details || []).flatMap((item) => {
+    if (!Array.isArray(item?.expense_splits)) return [];
+    const businessId = String(item.business_id || '').trim();
+    return item.expense_splits.map((row) => ({
+      ...row,
+      business_id: String(row.business_id || businessId).trim(),
+    }));
+  });
+}
+
+async function attachExpenseSplitsToDetails(details) {
+  const rows = Array.isArray(details) ? details : [];
+  if (rows.length === 0) return rows;
+  const splitRows = await fetchExpenseDeptSplits(rows);
+  const splitMap = new Map();
+
+  for (const row of splitRows) {
+    const businessId = String(row.business_id || '').trim();
+    if (!businessId) continue;
+    const current = splitMap.get(businessId) || [];
+    current.push({
+      business_id: businessId,
+      split_type: String(row.split_type || '').trim(),
+      category: splitExpenseCategory(row.split_type),
+      department: normalizeDept(row.department),
+      amount: numberValue(row.amount),
+      note: row.note || '',
+    });
+    splitMap.set(businessId, current);
+  }
+
+  return rows.map((item) => ({
+    ...item,
+    expense_splits: splitMap.get(String(item.business_id || '').trim()) || [],
+  }));
+}
+
+function buildAllocatedExpenseItems(rows) {
+  const grouped = new Map();
+
+  for (const row of rows || []) {
+    const month = budgetMonthOf(row);
+    const dept = normalizeDept(row.dept_name);
+    if (!month || !dept) continue;
+    const key = `${compactDept(dept)}__${month}`;
+    const current = grouped.get(key) || {
+      department: dept,
+      month,
+      operationTotal: 0,
+      operationCount: 0,
+      purchaseTotal: 0,
+      purchaseCount: 0,
+      managementTotal: 0,
+      salaryTotal: 0,
+      officeTotal: 0,
+    };
+
+    const operationExpense = numberValue(row.operation_expense);
+    const purchaseExpense = numberValue(row.purchase_expense);
+    const salaryExpense = numberValue(row.salary_expense);
+    const officeExpense = numberValue(row.office_expense);
+    current.managementTotal += numberValue(row.management_expense);
+    current.salaryTotal += salaryExpense;
+    current.officeTotal += officeExpense;
+    current.operationTotal += operationExpense + salaryExpense + officeExpense;
+    current.purchaseTotal += purchaseExpense;
+    current.operationCount += operationExpense + salaryExpense + officeExpense > 0 ? 1 : 0;
+    current.purchaseCount += purchaseExpense > 0 ? 1 : 0;
+    grouped.set(key, current);
+  }
+
+  return [...grouped.values()].map((item) => ({
+    ...item,
+    operationTotal: Number(item.operationTotal.toFixed(2)),
+    purchaseTotal: Number(item.purchaseTotal.toFixed(2)),
+    managementTotal: Number(item.managementTotal.toFixed(2)),
+    salaryTotal: Number(item.salaryTotal.toFixed(2)),
+    officeTotal: Number(item.officeTotal.toFixed(2)),
+  }));
+}
+
+/** 按三类预算口径为有效预算流程挂接支出金额 */
+async function attachExpenseAmounts(records, { startDate, endDate, approvedDetails } = {}) {
+  if (!records || records.length === 0) return records || [];
+
+  let details = Array.isArray(approvedDetails) ? approvedDetails : [];
+  if (!Array.isArray(approvedDetails)) {
+    try {
+      details = (await fetchApprovedExpenseSummary({ startDate, endDate })).details;
+    } catch {
+      details = [];
+    }
+  }
+
+  const prepared = records.map((row) => ({
+    ...row,
+    budget_breakdown: budgetBreakdownOf(row),
+  }));
+  const expenseMap = new Map();
+  const hasEmbeddedSplits = details.some((item) => Array.isArray(item?.expense_splits));
+  const splitRows = hasEmbeddedSplits
+    ? embeddedExpenseSplitRows(details)
+    : await fetchExpenseDeptSplits(details);
+  const splitBusinessIds = new Set(splitRows.map((row) => String(row.business_id || '').trim()).filter(Boolean));
+  const detailMonthMap = new Map();
+  for (const item of details) {
+    const businessId = String(item.business_id || '').trim();
+    if (!businessId) continue;
+    const month = item.query_month || approvedDetailMonth(item);
+    if (month) detailMonthMap.set(businessId, month);
+  }
+
+  for (const row of splitRows) {
+    const businessId = String(row.business_id || '').trim();
+    const month = detailMonthMap.get(businessId);
+    if (!month) continue;
+    const category = splitExpenseCategory(row.split_type);
+    addExpenseBreakdown(expenseMap, row.department, month, {
+      [category]: numberValue(row.amount),
+    });
+  }
+
+  for (const item of details) {
+    const month = item.query_month || approvedDetailMonth(item);
+    const amount = numberValue(firstNonEmpty(item.base_currency_amount, item.amount, item.detail_summary_amount));
+    if (!month || amount <= 0) continue;
+    const businessId = String(item.business_id || '').trim();
+    if (businessId && splitBusinessIds.has(businessId)) continue;
+    addDirectExpense(expenseMap, expenseDepartment(item), month, item, amount);
+  }
+
+  return prepared.map((row, index) => {
+    const month = budgetMonthOf(row);
+    const direct = expenseMap.get(`${compactDept(row.dept_name)}__${month}`) || {
+      operation: 0,
+      purchase: 0,
+      salary: 0,
+      office: 0,
+      management: 0,
+    };
+    const managementExpense = direct.management || direct.operation + direct.purchase;
+    const managementRounded = Number(managementExpense.toFixed(2));
+    const operationRounded = Number(direct.operation.toFixed(2));
+    const purchaseRounded = Number(direct.purchase.toFixed(2));
+    const salaryRounded = Number(direct.salary.toFixed(2));
+    const officeRounded = Number(direct.office.toFixed(2));
+    const totalRounded = Number((managementRounded + salaryRounded + officeRounded).toFixed(2));
+
+    return {
+      ...row,
+      management_expense: managementRounded,
+      operation_expense: operationRounded,
+      purchase_expense: purchaseRounded,
+      salary_expense: salaryRounded,
+      office_expense: officeRounded,
+      approved_amount: totalRounded,
+      expense_breakdown: {
+        management: managementRounded,
+        operation: operationRounded,
+        purchase: purchaseRounded,
+        salary: salaryRounded,
+        office: officeRounded,
+        total: totalRounded,
+      },
+    };
+  });
 }
 
 function approvedDetailMonth(item) {
   return formatMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
 }
 
+const excludedExpenseStatusKeywords = [
+  'reject',
+  'refuse',
+  'cancel',
+  'terminate',
+  '撤销',
+  '取消',
+  '拒绝',
+  '驳回',
+];
+
+function isExcludedExpense(item) {
+  const statusValues = [
+    item.approval_status,
+    item.local_approval_status,
+    item.live_approval_status,
+    item.live_status,
+    item.flow_status,
+    item.status,
+    item.biz_action,
+    item.live_biz_action,
+    item.result,
+    item.live_result,
+    item.approval_result,
+    item.approve_result,
+    item.process_result,
+    item.process_status,
+    item.cashier_status,
+    item.cashier_result,
+    item.local_cashier_status,
+    item.local_cashier_result,
+  ];
+
+  return statusValues.some((value) => {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return false;
+    return excludedExpenseStatusKeywords.some((keyword) => text.includes(keyword));
+  });
+}
+
+function needsLiveExpenseStatus(item) {
+  if (!VERIFY_EXPENSE_STATUS_WITH_DINGTALK) return false;
+  if (isExcludedExpense(item)) return false;
+  if (!item.process_instance_id) return false;
+  if (item.approval_completed_at) return false;
+
+  const statusText = [
+    item.approval_status,
+    item.local_approval_status,
+    item.flow_status,
+    item.status,
+    item.biz_action,
+    item.result,
+    item.approval_result,
+    item.process_status,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const resultText = String(firstNonEmpty(
+    item.result,
+    item.approval_result,
+    item.approve_result,
+    item.process_result
+  ) || '').trim().toLowerCase();
+  const isClearlyAgreed = resultText === 'agree' ||
+    resultText === 'approved' ||
+    resultText === 'pass' ||
+    resultText === 'success' ||
+    resultText.includes('同意') ||
+    resultText.includes('通过');
+  if (isClearlyAgreed) return false;
+
+  return statusText.includes('running') ||
+    statusText.includes('pending') ||
+    statusText.includes('process') ||
+    statusText.includes('审批中') ||
+    statusText.includes('处理中');
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = [];
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit || 1, items.length || 1));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function getCachedExpenseStatus(processInstanceId) {
+  const cached = expenseStatusCache.get(processInstanceId);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > EXPENSE_STATUS_CACHE_TTL_MS) {
+    expenseStatusCache.delete(processInstanceId);
+    return null;
+  }
+  return cached.value;
+}
+
+async function getLiveExpenseStatus(processInstanceId) {
+  const cached = getCachedExpenseStatus(processInstanceId);
+  if (cached) return cached;
+
+  try {
+    const detail = await getProcessInstanceDetail(processInstanceId);
+    const value = {
+      live_approval_status: detail?.status || '',
+      live_status: detail?.status || '',
+      live_result: detail?.result || '',
+      live_biz_action: detail?.bizAction || detail?.biz_action || '',
+      live_finish_time: detail?.finishTime || detail?.finish_time || '',
+    };
+    expenseStatusCache.set(processInstanceId, { cachedAt: Date.now(), value });
+    return value;
+  } catch (error) {
+    console.warn(`[WARN] Live DingTalk expense status unavailable for ${processInstanceId}: ${error.message}`);
+    return null;
+  }
+}
+
+async function applyLiveExpenseStatuses(items, warnings) {
+  const candidates = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    if (!needsLiveExpenseStatus(item)) continue;
+    const processInstanceId = String(item.process_instance_id || '').trim();
+    if (!processInstanceId || seen.has(processInstanceId)) continue;
+    seen.add(processInstanceId);
+    candidates.push(processInstanceId);
+  }
+
+  if (candidates.length === 0) return items;
+
+  const limitedCandidates = candidates.slice(0, EXPENSE_STATUS_VERIFY_LIMIT);
+  if (limitedCandidates.length < candidates.length) {
+    warnings.push(`有 ${candidates.length - limitedCandidates.length} 条审批中支出未做实时状态校验`);
+  }
+
+  const statuses = await mapLimit(limitedCandidates, EXPENSE_STATUS_VERIFY_CONCURRENCY, async (processInstanceId) => [
+    processInstanceId,
+    await getLiveExpenseStatus(processInstanceId),
+  ]);
+  const statusMap = new Map(statuses.filter(([, status]) => status));
+
+  return items.map((item) => {
+    const processInstanceId = String(item.process_instance_id || '').trim();
+    const liveStatus = statusMap.get(processInstanceId) || getCachedExpenseStatus(processInstanceId);
+    return liveStatus ? { ...item, ...liveStatus } : item;
+  });
+}
+
+/** 从支出记录的 JSONB 拆分列中提取各部门明细金额（原始币种） */
+const approvedExpenseStatusKeywords = [
+  'completed',
+  'running',        // 钉钉审批流大量已通过记录 approval_status 仍为 RUNNING，未被驳回/终止即视为有效
+  'approved',
+  'agree',
+  'pass',
+  'done',
+  'finish',
+  'success',
+  '已通过',
+  '已完成',
+  '同意',
+  '通过',
+  '完成',
+];
+
+function isApprovedExpense(item) {
+  if (isExcludedExpense(item)) return false;
+  if (item.approval_completed_at) return true;
+
+  const statusValues = [
+    item.approval_status,
+    item.flow_status,
+    item.status,
+    item.biz_action,
+    item.result,
+    item.approval_result,
+    item.approve_result,
+    item.process_result,
+    item.process_status,
+  ];
+
+  return statusValues.some((value) => {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return false;
+    return approvedExpenseStatusKeywords.some((keyword) => text.includes(String(keyword).toLowerCase()));
+  });
+}
+
+function extractDeptSplitEntries(item) {
+  const entries = [];
+  const splitColumns = [
+    { col: 'salary_by_department', splitType: 'salary' },
+    { col: 'social_insurance_by_department', splitType: 'social_insurance' },
+    { col: 'office_space_by_department', splitType: 'office_space' },
+  ];
+
+  for (const { col, splitType } of splitColumns) {
+    const data = item[col];
+    if (!data || !Array.isArray(data)) continue;
+    for (const entry of data) {
+      const dept = normalizeDept(entry.department);
+      const amt = numberValue(entry.amount);
+      if (dept && amt > 0) {
+        entries.push({ department: dept, amount: amt, splitType });
+      }
+    }
+  }
+
+  return entries;
+}
+
+function addApprovedExpenseGroup(grouped, department, month, values = {}) {
+  const dept = normalizeDept(department);
+  if (!dept || !month) return;
+
+  const key = `${compactDept(dept)}__${month}`;
+  const current = grouped.get(key) || {
+    department: dept,
+    month,
+    operationTotal: 0,
+    operationCount: 0,
+    purchaseTotal: 0,
+    purchaseCount: 0,
+    managementTotal: 0,
+    salaryTotal: 0,
+    officeTotal: 0,
+  };
+
+  current.operationTotal += numberValue(values.operationTotal);
+  current.purchaseTotal += numberValue(values.purchaseTotal);
+  current.managementTotal += numberValue(values.managementTotal);
+  current.salaryTotal += numberValue(values.salaryTotal);
+  current.officeTotal += numberValue(values.officeTotal);
+  current.operationCount += numberValue(values.operationCount);
+  current.purchaseCount += numberValue(values.purchaseCount);
+  grouped.set(key, current);
+}
+
+function splitRowsOf(item) {
+  const dbSplits = Array.isArray(item?.expense_splits) ? item.expense_splits : [];
+  if (dbSplits.length > 0) {
+    return dbSplits
+      .map((entry) => ({
+        department: normalizeDept(entry.department),
+        amount: numberValue(entry.amount),
+        category: splitExpenseCategory(entry.split_type || entry.splitType),
+      }))
+      .filter((entry) => entry.department && entry.amount > 0);
+  }
+
+  return extractDeptSplitEntries(item).map((entry) => ({
+    department: normalizeDept(entry.department),
+    amount: numberValue(entry.amount),
+    category: splitExpenseCategory(entry.splitType),
+  }));
+}
+
+function roundApprovedExpenseItems(items) {
+  return items.map((item) => ({
+    ...item,
+    operationTotal: Number(numberValue(item.operationTotal).toFixed(2)),
+    purchaseTotal: Number(numberValue(item.purchaseTotal).toFixed(2)),
+    managementTotal: Number(numberValue(item.managementTotal).toFixed(2)),
+    salaryTotal: Number(numberValue(item.salaryTotal).toFixed(2)),
+    officeTotal: Number(numberValue(item.officeTotal).toFixed(2)),
+    operationCount: Number(numberValue(item.operationCount).toFixed(2)),
+    purchaseCount: Number(numberValue(item.purchaseCount).toFixed(2)),
+  }));
+}
+
 function summarizeApprovedDetails(details) {
   const grouped = new Map();
 
   for (const item of details) {
-    const department = normalizeDept(firstNonEmpty(
-      item.department_resolved,
-      item.applicant_department,
-      item.creator_department,
-      item.query_department
-    ));
     const month = item.query_month || approvedDetailMonth(item);
-    if (!department || !month) continue;
-
-    const key = `${department}__${month}`;
-    const current = grouped.get(key) || {
-      department,
-      month,
-      operationTotal: 0,
-      operationCount: 0,
-      purchaseTotal: 0,
-      purchaseCount: 0,
-    };
+    if (!month) continue;
 
     const amount = numberValue(firstNonEmpty(item.base_currency_amount, item.amount, item.detail_summary_amount));
+    if (amount <= 0) continue;
+
+    const directDepartment = expenseDepartment(item);
+
     if (item.expense_kind === 'purchase') {
-      current.purchaseTotal += amount;
-      current.purchaseCount += 1;
-    } else {
-      current.operationTotal += amount;
-      current.operationCount += 1;
+      addApprovedExpenseGroup(grouped, directDepartment, month, {
+        purchaseTotal: amount,
+        managementTotal: amount,
+        purchaseCount: 1,
+      });
+      continue;
     }
-    grouped.set(key, current);
+
+    const splits = splitRowsOf(item);
+    if (splits.length === 0) {
+      addApprovedExpenseGroup(grouped, directDepartment, month, {
+        operationTotal: amount,
+        managementTotal: amount,
+        operationCount: 1,
+      });
+      continue;
+    }
+
+    const touchedDepartments = new Set();
+    let classifiedSplitTotal = 0;
+    for (const entry of splits) {
+      const category = splitExpenseCategory(entry.category);
+      const values = { operationTotal: entry.amount };
+      if (category === 'salary') values.salaryTotal = entry.amount;
+      else if (category === 'office') values.officeTotal = entry.amount;
+      else values.managementTotal = entry.amount;
+
+      addApprovedExpenseGroup(grouped, entry.department, month, values);
+      touchedDepartments.add(compactDept(entry.department));
+      classifiedSplitTotal += entry.amount;
+    }
+
+    const remainder = Number((amount - classifiedSplitTotal).toFixed(2));
+    if (remainder > 0.01) {
+      addApprovedExpenseGroup(grouped, directDepartment, month, {
+        operationTotal: remainder,
+        managementTotal: remainder,
+      });
+      touchedDepartments.add(compactDept(directDepartment));
+    }
+
+    for (const deptKey of touchedDepartments) {
+      const current = grouped.get(`${deptKey}__${month}`);
+      if (current) current.operationCount += 1;
+    }
   }
 
-  return [...grouped.values()];
+  return roundApprovedExpenseItems([...grouped.values()]);
+}
+
+/** 将 YYYY-MM 短格式展开为完整日期 YYYY-MM-DD，避免支出 API 的 timestamp 列报错 */
+function expandMonthDate(value, isEndDate = false) {
+  if (!value) return value;
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = text.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return text;
+  if (isEndDate) {
+    const lastDay = new Date(Number(match[1]), Number(match[2]), 0).getDate();
+    return `${match[1]}-${match[2]}-${String(lastDay).padStart(2, '0')}`;
+  }
+  return `${match[1]}-${match[2]}-01`;
+}
+
+async function fetchApprovalExpenseDetails(dateRange) {
+  const params = [];
+  const startDate = expandMonthDate(dateRange.startDate, false);
+  const endDate = expandMonthDate(dateRange.endDate, true);
+  const startParam = startDate ? params.push(startDate) : null;
+  const endParam = endDate ? params.push(endDate) : null;
+
+  const dateWhereFor = (alias) => {
+    const dateExpr = `COALESCE(${alias}.source_created_at::date, ${alias}.request_date, ${alias}.approval_completed_at::date)`;
+    let whereClause = 'WHERE 1=1';
+    if (startParam) whereClause += ` AND ${dateExpr} >= $${startParam}::date`;
+    if (endParam) whereClause += ` AND ${dateExpr} <= $${endParam}::date`;
+    return whereClause;
+  };
+
+  const client = new Client({
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    database: APPROVAL_DB_DATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 2000),
+  });
+
+  try {
+    await client.connect();
+    const result = await client.query(`
+      SELECT
+        'operation'::text AS expense_kind,
+        o.business_id,
+        o.process_instance_id,
+        o.request_date,
+        o.applicant_department,
+        o.creator_department,
+        o.applicant_department AS query_department,
+        o.source_created_at,
+        o.source_updated_at,
+        o.updated_at,
+        o.approval_completed_at,
+        o.approval_status,
+        o.cashier_status,
+        o.cashier_result,
+        o.raw_data->>'status' AS status,
+        o.raw_data->>'bizAction' AS biz_action,
+        o.raw_data->>'result' AS result,
+        o.raw_data->>'title' AS title,
+        o.expense_type,
+        o.operation_expense,
+        o.employee_benefits_expense,
+        o.bonus_expense,
+        o.salary_expense,
+        o.administrative_expense,
+        o.matter_description,
+        o.amount,
+        NULL::numeric AS detail_summary_amount,
+        o.base_currency_amount
+      FROM approval_expense_operation o
+      ${dateWhereFor('o')}
+      UNION ALL
+      SELECT
+        'purchase'::text AS expense_kind,
+        p.business_id,
+        p.process_instance_id,
+        p.request_date,
+        p.applicant_department,
+        p.creator_department,
+        p.applicant_department AS query_department,
+        p.source_created_at,
+        p.source_updated_at,
+        p.updated_at,
+        p.approval_completed_at,
+        p.approval_status,
+        p.cashier_status,
+        p.cashier_result,
+        p.raw_data->>'status' AS status,
+        p.raw_data->>'bizAction' AS biz_action,
+        p.raw_data->>'result' AS result,
+        p.raw_data->>'title' AS title,
+        p.purchase_expense AS expense_type,
+        NULL::varchar AS operation_expense,
+        NULL::varchar AS employee_benefits_expense,
+        NULL::varchar AS bonus_expense,
+        NULL::varchar AS salary_expense,
+        NULL::varchar AS administrative_expense,
+        NULL::text AS matter_description,
+        NULL::numeric AS amount,
+        p.detail_summary_amount,
+        p.base_currency_amount
+      FROM approval_expense_purchase p
+      ${dateWhereFor('p')}
+    `, params);
+    return result.rows;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+function expenseSummaryCacheKey(dateRange) {
+  return [
+    expandMonthDate(dateRange.startDate, false) || '',
+    expandMonthDate(dateRange.endDate, true) || '',
+    VERIFY_EXPENSE_STATUS_WITH_DINGTALK ? 'live' : 'db',
+  ].join('__');
+}
+
+async function fetchApprovedExpenseSummaryFresh(dateRange) {
+  const warnings = [];
+  const detailMap = new Map();
+
+  try {
+    const rawDetails = (await fetchApprovalExpenseDetails(dateRange)).filter((item) => !isExcludedExpense(item));
+    const verifiedDetails = await applyLiveExpenseStatuses(rawDetails, warnings);
+
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'operation' && !isExcludedExpense(e))) {
+      const queryMonth = approvedDetailMonth(item);
+      const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
+      detailMap.set(key, { ...item, query_month: queryMonth });
+    }
+
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'purchase' && !isExcludedExpense(e))) {
+      const queryMonth = approvedDetailMonth(item);
+      const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
+      detailMap.set(key, { ...item, query_month: queryMonth });
+    }
+  } catch (error) {
+    warnings.push(isProduction ? '支出数据库不可用' : `支出数据库不可用：${error.message}`);
+  }
+
+  const details = await attachExpenseSplitsToDetails([...detailMap.values()]);
+  return { items: summarizeApprovedDetails(details), details, warnings };
 }
 
 async function fetchApprovedExpenseSummary(dateRange) {
-  const warnings = [];
-  const detailMap = new Map();
-  const params = {
-    debug: 1,
-    flow_status: 'completed',
-    ...(dateRange.startDate ? { start_date: dateRange.startDate } : {}),
-    ...(dateRange.endDate ? { end_date: dateRange.endDate } : {}),
-  };
-
-  try {
-    const [operation, purchase] = await yunyingCircuit.execute(() =>
-      retry(() => Promise.all([
-        axios.get(`${YUNYING_API_BASE}/api/approvals/approved/operation/all`, { params, timeout: YUNYING_TIMEOUT_MS }),
-        axios.get(`${YUNYING_API_BASE}/api/approvals/approved/purchase/all`, { params, timeout: YUNYING_TIMEOUT_MS }),
-      ]), { label: 'yunying-approved' })
-    );
-
-    const operationItems = (Array.isArray(operation.data?.items) ? operation.data.items : [])
-;
-    const purchaseItems = (Array.isArray(purchase.data?.items) ? purchase.data.items : [])
-      ;
-
-    for (const item of operationItems) {
-      const queryMonth = approvedDetailMonth(item);
-      const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
-      detailMap.set(key, { ...item, expense_kind: 'operation', query_month: queryMonth });
-    }
-
-    for (const item of purchaseItems) {
-      const queryMonth = approvedDetailMonth(item);
-      const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
-      detailMap.set(key, { ...item, expense_kind: 'purchase', query_month: queryMonth });
-    }
-  } catch (error) {
-    warnings.push(isProduction ? '审批支出接口不可用' : `审批支出接口不可用：${error.message}`);
+  const key = expenseSummaryCacheKey(dateRange);
+  const cached = approvedExpenseSummaryCache.get(key);
+  if (cached && Date.now() - cached.cachedAt < APPROVED_EXPENSE_CACHE_TTL_MS) {
+    return cached.value || cached.promise;
   }
 
-  const details = [...detailMap.values()];
-  return { items: summarizeApprovedDetails(details), details, warnings };
+  const promise = fetchApprovedExpenseSummaryFresh(dateRange)
+    .catch((error) => {
+      approvedExpenseSummaryCache.delete(key);
+      throw error;
+    });
+  approvedExpenseSummaryCache.set(key, { cachedAt: Date.now(), promise });
+  const value = await promise;
+  approvedExpenseSummaryCache.set(key, { cachedAt: Date.now(), value });
+  return value;
+}
+
+function buildBudgetWhere(alias, { startDate, endDate, status } = {}) {
+  let whereClause = 'WHERE 1=1';
+  const params = [];
+  let paramIndex = 1;
+
+  ({ whereClause, paramIndex } = appendBudgetMonthRange(
+    whereClause,
+    params,
+    paramIndex,
+    startDate,
+    endDate,
+    budgetMonthExprFor(alias)
+  ));
+
+  if (status) {
+    whereClause += ` AND ${alias}.status = $${paramIndex}`;
+    params.push(status);
+    paramIndex++;
+  }
+
+  return { whereClause, params, paramIndex };
+}
+
+function productionBudgetCte(whereClause) {
+  const monthExpr = budgetMonthExprFor('p');
+  const deptExpr = deptPartitionExprFor('p');
+  return `
+    WITH filtered AS (
+      SELECT
+        p.id, p.form_no, p.process_instance_id, p.dept_name, p.budget_type,
+        p.declaration_month, p.budget_month, p.application_date, p.execution_region,
+        p.monthly_budget_amount, p.total_amount, p.creator_name, p.creator_userid,
+        p.create_time, p.status, p.remark, p.tenant_id,
+        ${monthExpr} AS budget_month_key,
+        ${deptExpr} AS dept_key
+      FROM production_budget p
+      ${whereClause}
+        AND (
+          EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
+          OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
+          OR EXISTS (SELECT 1 FROM budget_labor bl WHERE bl.form_no = p.form_no)
+        )
+    ),
+    picked AS (
+      SELECT *,
+             ROW_NUMBER() OVER (
+               PARTITION BY dept_key, budget_month_key
+               ORDER BY create_time DESC NULLS LAST, id DESC
+             ) AS rn
+      FROM filtered
+    ),
+    ranked AS (
+      SELECT
+        picked.*,
+        COALESCE(material.items, '[]'::json) AS material_items,
+        COALESCE(production.items, '[]'::json) AS production_items,
+        COALESCE(labor.items, '[]'::json) AS labor_items,
+        COALESCE(material.total, 0)::numeric AS material_budget,
+        COALESCE(production.total, 0)::numeric AS production_budget,
+        COALESCE(labor.total, 0)::numeric AS labor_budget
+      FROM picked
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) AS items,
+               COALESCE(SUM(COALESCE(x.amount, 0)), 0) AS total
+        FROM (SELECT * FROM budget_material WHERE form_no = picked.form_no ORDER BY id) x
+      ) material ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) AS items,
+               COALESCE(SUM(COALESCE(x.amount, 0)), 0) AS total
+        FROM (SELECT * FROM budget_production WHERE form_no = picked.form_no ORDER BY id) x
+      ) production ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) AS items,
+               COALESCE(SUM(COALESCE(x.amount, 0)), 0) AS total
+        FROM (SELECT * FROM budget_labor WHERE form_no = picked.form_no ORDER BY id) x
+      ) labor ON TRUE
+      WHERE picked.rn = 1
+    )
+  `;
+}
+
+function nonProductionBudgetCte(whereClause) {
+  const monthExpr = budgetMonthExprFor('n');
+  const deptExpr = deptPartitionExprFor('n');
+  return `
+    WITH filtered AS (
+      SELECT
+        n.id, n.form_no, n.process_instance_id, n.dept_name, n.budget_type,
+        n.declaration_month, n.budget_month, n.application_date, n.execution_region,
+        n.creator_name, n.creator_userid, n.create_time, n.status,
+        n.budget_amount, n.total_amount, n.remark, n.tenant_id,
+        ${monthExpr} AS budget_month_key,
+        ${deptExpr} AS dept_key
+      FROM non_production_budget n
+      ${whereClause}
+        AND (
+          EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
+          OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
+          OR EXISTS (SELECT 1 FROM budget_operation op WHERE op.form_no = n.form_no)
+        )
+    ),
+    picked AS (
+      SELECT *,
+             ROW_NUMBER() OVER (
+               PARTITION BY dept_key, budget_month_key
+               ORDER BY create_time DESC NULLS LAST, id DESC
+             ) AS rn
+      FROM filtered
+    ),
+    ranked AS (
+      SELECT
+        picked.*,
+        COALESCE(hr.items, '[]'::json) AS hr_items,
+        COALESCE(office.items, '[]'::json) AS office_items,
+        COALESCE(operation.items, '[]'::json) AS operation_items,
+        COALESCE(hr.total, 0)::numeric AS hr_budget,
+        COALESCE(office.total, 0)::numeric AS office_budget,
+        COALESCE(operation.total, 0)::numeric AS operation_budget
+      FROM picked
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) AS items,
+               COALESCE(SUM(COALESCE(x.amount, 0)), 0) AS total
+        FROM (SELECT * FROM budget_hr WHERE form_no = picked.form_no ORDER BY id) x
+      ) hr ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) AS items,
+               COALESCE(SUM(COALESCE(x.amount, 0)), 0) AS total
+        FROM (SELECT * FROM budget_office WHERE form_no = picked.form_no ORDER BY id) x
+      ) office ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(json_agg(row_to_json(x)), '[]'::json) AS items,
+               COALESCE(SUM(COALESCE(x.amount, 0)), 0) AS total
+        FROM (SELECT * FROM budget_operation WHERE form_no = picked.form_no ORDER BY id) x
+      ) operation ON TRUE
+      WHERE picked.rn = 1
+    )
+  `;
+}
+
+async function fetchProductionBudgetRows(client, filters = {}, paging = null) {
+  const { whereClause, params, paramIndex } = buildBudgetWhere('p', filters);
+  const cte = productionBudgetCte(whereClause);
+  const limitSql = paging ? ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}` : '';
+  const queryParams = paging ? [...params, paging.limit, paging.offset] : params;
+  const result = await client.query(`
+    ${cte}
+    SELECT *
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY create_time DESC NULLS LAST, id DESC
+    ${limitSql}
+  `, queryParams);
+  return result.rows;
+}
+
+async function countProductionBudgetRows(client, filters = {}) {
+  const { whereClause, params } = buildBudgetWhere('p', filters);
+  const cte = productionBudgetCte(whereClause);
+  const result = await client.query(`
+    ${cte}
+    SELECT COUNT(*)::int AS count
+    FROM ranked
+    WHERE rn = 1
+  `, params);
+  return result.rows[0]?.count || 0;
+}
+
+async function fetchNonProductionBudgetRows(client, filters = {}, paging = null) {
+  const { whereClause, params, paramIndex } = buildBudgetWhere('n', filters);
+  const cte = nonProductionBudgetCte(whereClause);
+  const limitSql = paging ? ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}` : '';
+  const queryParams = paging ? [...params, paging.limit, paging.offset] : params;
+  const result = await client.query(`
+    ${cte}
+    SELECT *
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY create_time DESC NULLS LAST, id DESC
+    ${limitSql}
+  `, queryParams);
+  return result.rows;
+}
+
+async function countNonProductionBudgetRows(client, filters = {}) {
+  const { whereClause, params } = buildBudgetWhere('n', filters);
+  const cte = nonProductionBudgetCte(whereClause);
+  const result = await client.query(`
+    ${cte}
+    SELECT COUNT(*)::int AS count
+    FROM ranked
+    WHERE rn = 1
+  `, params);
+  return result.rows[0]?.count || 0;
 }
 
 // GET /api/list/production - 获取生产预算列表
@@ -148,68 +1156,18 @@ router.get('/production', async (req, res) => {
   try {
     const { startDate, endDate, status, page = 1, pageSize = 20 } = req.query;
     const offset = (page - 1) * pageSize;
-
-    let whereClause = 'WHERE 1=1';
-    const params = [];
-    let paramIndex = 1;
-
-    if (startDate) {
-      whereClause += ` AND create_time >= $${paramIndex}`;
-      params.push(startDate + ' 00:00:00');
-      paramIndex++;
-    }
-
-    if (endDate) {
-      whereClause += ` AND create_time <= $${paramIndex}`;
-      params.push(endDate + ' 23:59:59');
-      paramIndex++;
-    }
-
-    if (status) {
-      whereClause += ` AND status = $${paramIndex}`;
-      params.push(status);
-      paramIndex++;
-    }
-
-    const selectList = await buildSelectList('production_budget', [
-      { name: 'id', type: 'integer' },
-      { name: 'form_no' },
-      { name: 'process_instance_id' },
-      { name: 'dept_name' },
-      { name: 'budget_type' },
-      { name: 'declaration_month' },
-      { name: 'budget_month' },
-      { name: 'application_date' },
-      { name: 'execution_region' },
-      { name: 'monthly_budget_amount', type: 'numeric' },
-      { name: 'total_amount', type: 'numeric' },
-      { name: 'creator_name' },
-      { name: 'creator_userid' },
-      { name: 'create_time', type: 'timestamp' },
-      { name: 'status' },
-      { name: 'remark' },
+    const db = { query };
+    const filters = { startDate, endDate, status };
+    const [dataRows, total] = await Promise.all([
+      fetchProductionBudgetRows(db, filters, { limit: Number(pageSize), offset }),
+      countProductionBudgetRows(db, filters),
     ]);
-
-    // 查询数据
-    const dataQuery = `
-      SELECT ${selectList}
-      FROM production_budget
-      ${whereClause}
-      ORDER BY create_time DESC
-      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-    `;
-    params.push(pageSize, offset);
-
-    const dataResult = await query(dataQuery, params);
-
-    // 查询总数
-    const countQuery = `SELECT COUNT(*) FROM production_budget ${whereClause}`;
-    const countResult = await query(countQuery, params.slice(0, -2));
+    const rowsWithExpense = await attachExpenseAmounts(dataRows, { startDate, endDate });
 
     res.json({
       success: true,
-      data: dataResult.rows,
-      total: parseInt(countResult.rows[0].count),
+      data: rowsWithExpense,
+      total,
       page: parseInt(page),
       pageSize: parseInt(pageSize),
     });
@@ -224,66 +1182,18 @@ router.get('/non-production', async (req, res) => {
   try {
     const { startDate, endDate, status, page = 1, pageSize = 20 } = req.query;
     const offset = (page - 1) * pageSize;
-
-    let whereClause = 'WHERE 1=1';
-    const params = [];
-    let paramIndex = 1;
-
-    if (startDate) {
-      whereClause += ` AND create_time >= $${paramIndex}`;
-      params.push(startDate + ' 00:00:00');
-      paramIndex++;
-    }
-
-    if (endDate) {
-      whereClause += ` AND create_time <= $${paramIndex}`;
-      params.push(endDate + ' 23:59:59');
-      paramIndex++;
-    }
-
-    if (status) {
-      whereClause += ` AND status = $${paramIndex}`;
-      params.push(status);
-      paramIndex++;
-    }
-
-    const selectList = await buildSelectList('non_production_budget', [
-      { name: 'id', type: 'integer' },
-      { name: 'form_no' },
-      { name: 'process_instance_id' },
-      { name: 'dept_name' },
-      { name: 'budget_type' },
-      { name: 'declaration_month' },
-      { name: 'budget_month' },
-      { name: 'application_date' },
-      { name: 'execution_region' },
-      { name: 'creator_name' },
-      { name: 'creator_userid' },
-      { name: 'create_time', type: 'timestamp' },
-      { name: 'status' },
-      { name: 'budget_amount', type: 'numeric' },
-      { name: 'total_amount', type: 'numeric' },
-      { name: 'remark' },
+    const db = { query };
+    const filters = { startDate, endDate, status };
+    const [dataRows, total] = await Promise.all([
+      fetchNonProductionBudgetRows(db, filters, { limit: Number(pageSize), offset }),
+      countNonProductionBudgetRows(db, filters),
     ]);
-
-    const dataQuery = `
-      SELECT ${selectList}
-      FROM non_production_budget
-      ${whereClause}
-      ORDER BY create_time DESC
-      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-    `;
-    params.push(pageSize, offset);
-
-    const dataResult = await query(dataQuery, params);
-
-    const countQuery = `SELECT COUNT(*) FROM non_production_budget ${whereClause}`;
-    const countResult = await query(countQuery, params.slice(0, -2));
+    const rowsWithExpense = await attachExpenseAmounts(dataRows, { startDate, endDate });
 
     res.json({
       success: true,
-      data: dataResult.rows,
-      total: parseInt(countResult.rows[0].count),
+      data: rowsWithExpense,
+      total,
       page: parseInt(page),
       pageSize: parseInt(pageSize),
     });
@@ -338,18 +1248,39 @@ router.get('/approval', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
+    const db = { query };
+    const [productionTotal, nonProductionTotal] = await Promise.all([
+      countProductionBudgetRows(db, {}),
+      countNonProductionBudgetRows(db, {}),
+    ]);
 
     const statsResult = await query(`
       SELECT
-        (SELECT COUNT(*) FROM production_budget WHERE DATE(create_time) = $1) as production_today,
-        (SELECT COUNT(*) FROM non_production_budget WHERE DATE(create_time) = $1) as non_production_today,
-        (SELECT COUNT(*) FROM production_budget) as production_total,
-        (SELECT COUNT(*) FROM non_production_budget) as non_production_total
+        (SELECT COUNT(*)
+         FROM production_budget p
+         WHERE DATE(p.create_time) = $1
+           AND (
+             EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
+             OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
+             OR EXISTS (SELECT 1 FROM budget_labor bl WHERE bl.form_no = p.form_no)
+           )) as production_today,
+        (SELECT COUNT(*)
+         FROM non_production_budget n
+         WHERE DATE(n.create_time) = $1
+           AND (
+             EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
+             OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
+             OR EXISTS (SELECT 1 FROM budget_operation op WHERE op.form_no = n.form_no)
+           )) as non_production_today
     `, [today]);
 
     res.json({
       success: true,
-      data: statsResult.rows[0],
+      data: {
+        ...statsResult.rows[0],
+        production_total: productionTotal,
+        non_production_total: nonProductionTotal,
+      },
     });
   } catch (error) {
     console.error('[ERROR] Stats error:', error);
@@ -361,22 +1292,6 @@ router.get('/stats', async (req, res) => {
 router.get('/report', async (req, res) => {
   try {
     const { startDate, endDate, includeApproved } = req.query;
-    const params = [];
-    let whereClause = 'WHERE 1=1';
-    let paramIndex = 1;
-    const budgetMonthExpr = "COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, ''))";
-
-    if (startDate) {
-      whereClause += ` AND ${budgetMonthExpr} >= $${paramIndex}`;
-      params.push(formatMonth(startDate));
-      paramIndex++;
-    }
-
-    if (endDate) {
-      whereClause += ` AND ${budgetMonthExpr} <= $${paramIndex}`;
-      params.push(formatMonth(endDate));
-      paramIndex++;
-    }
 
     const exportClient = new Client({
       host: process.env.PGHOST,
@@ -388,82 +1303,45 @@ router.get('/report', async (req, res) => {
     });
     await exportClient.connect();
 
-    let productionResult;
-    let nonProductionResult;
+    let productionRowsRaw;
+    let nonProductionRowsRaw;
     try {
-      productionResult = await exportClient.query(`
-        SELECT
-          p.form_no, p.process_instance_id, p.dept_name, p.budget_type, p.declaration_month,
-          p.budget_month, p.application_date, p.execution_region, p.monthly_budget_amount,
-          p.total_amount, p.creator_name, p.creator_userid, p.create_time, p.status, p.remark,
-          p.tenant_id,
-          COALESCE((
-            SELECT json_agg(row_to_json(x))
-            FROM (
-              SELECT * FROM budget_material WHERE form_no = p.form_no ORDER BY id
-            ) x
-          ), '[]'::json) AS material_items,
-          COALESCE((
-            SELECT json_agg(row_to_json(x))
-            FROM (
-              SELECT * FROM budget_production WHERE form_no = p.form_no ORDER BY id
-            ) x
-          ), '[]'::json) AS production_items,
-          COALESCE((
-            SELECT json_agg(row_to_json(x))
-            FROM (
-              SELECT * FROM budget_labor WHERE form_no = p.form_no ORDER BY id
-            ) x
-          ), '[]'::json) AS labor_items
-        FROM production_budget p
-        ${whereClause}
-        ORDER BY p.create_time DESC
-      `, params);
-
-      nonProductionResult = await exportClient.query(`
-        SELECT
-          n.form_no, n.process_instance_id, n.dept_name, n.budget_type, n.declaration_month,
-          n.budget_month, n.application_date, n.execution_region, n.creator_name, n.creator_userid,
-          n.create_time, n.status, n.budget_amount, n.total_amount, n.remark, n.tenant_id,
-          COALESCE((
-            SELECT json_agg(row_to_json(x))
-            FROM (
-              SELECT * FROM budget_hr WHERE form_no = n.form_no ORDER BY id
-            ) x
-          ), '[]'::json) AS hr_items,
-          COALESCE((
-            SELECT json_agg(row_to_json(x))
-            FROM (
-              SELECT * FROM budget_office WHERE form_no = n.form_no ORDER BY id
-            ) x
-          ), '[]'::json) AS office_items,
-          COALESCE((
-            SELECT json_agg(row_to_json(x))
-            FROM (
-              SELECT * FROM budget_operation WHERE form_no = n.form_no ORDER BY id
-            ) x
-          ), '[]'::json) AS operation_items
-        FROM non_production_budget n
-        ${whereClause}
-        ORDER BY n.create_time DESC
-      `, params);
+      const filters = { startDate, endDate };
+      productionRowsRaw = await fetchProductionBudgetRows(exportClient, filters);
+      nonProductionRowsRaw = await fetchNonProductionBudgetRows(exportClient, filters);
     } finally {
       await exportClient.end();
     }
 
+    let warnings = [];
+    let approvedItems = null;
+    let approvedDetails = null;
+    const shouldIncludeApproved = String(includeApproved || '') === '1';
+    if (shouldIncludeApproved) {
+      const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
+      approvedItems = approved.items;
+      approvedDetails = approved.details;
+      warnings = approved.warnings;
+    }
+
+    const productionRows = await attachExpenseAmounts(
+      productionRowsRaw,
+      { startDate, endDate, approvedDetails: shouldIncludeApproved ? approvedDetails : [] }
+    );
+    const nonProductionRows = await attachExpenseAmounts(
+      nonProductionRowsRaw,
+      { startDate, endDate, approvedDetails: shouldIncludeApproved ? approvedDetails : [] }
+    );
     const responseData = {
-      production: productionResult.rows,
-      nonProduction: nonProductionResult.rows,
+      production: productionRows,
+      nonProduction: nonProductionRows,
       reportStartDate: startDate || '',
       reportEndDate: endDate || '',
     };
 
-    let warnings = [];
-    if (String(includeApproved || '') === '1') {
-      const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
-      responseData.approvedExpenses = approved.items;
-      responseData.approvedExpenseDetails = approved.details;
-      warnings = approved.warnings;
+    if (shouldIncludeApproved) {
+      responseData.approvedExpenses = approvedItems;
+      responseData.approvedExpenseDetails = approvedDetails;
     }
 
     res.json({
