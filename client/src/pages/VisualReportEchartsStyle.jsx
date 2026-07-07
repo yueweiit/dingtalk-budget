@@ -317,6 +317,10 @@ export default function VisualReportEchartsStyle({ onBack }) {
             <div style={styles.statLabel}>实际支出合计</div>
           </div>
           <div style={styles.statCard}>
+            <div style={{ ...styles.statValue, color: CHART_GREEN }}>{formatCurrency(stats.budgetSubmittedApprovedTotal)}</div>
+            <div style={styles.statLabel}>有提交预算部门支出合计</div>
+          </div>
+          <div style={styles.statCard}>
             <div style={styles.statValue}>{stats.overallRate}</div>
             <div style={styles.statLabel}>整体执行率</div>
           </div>

@@ -546,6 +546,7 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
     managementApproved: 0,
     salaryApproved: 0,
     officeApproved: 0,
+    budgetSubmittedApprovedTotal: 0,
     operationCount: 0,
     purchaseCount: 0,
   };
@@ -684,6 +685,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       managementApproved: 0,
       salaryApproved: 0,
       officeApproved: 0,
+      budgetSubmittedApprovedTotal: 0,
       operationCount: 0,
       purchaseCount: 0,
     };
@@ -695,6 +697,11 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
     current.officeApproved += toAmount(item.officeTotal);
     current.operationCount += Number(item.operationCount || 0);
     current.purchaseCount += Number(item.purchaseCount || 0);
+    if ((toAmount(current.productionBudget) + toAmount(current.nonProductionBudget)) > 0) {
+      const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.officeTotal);
+      const fallbackApproved = toAmount(item.operationTotal) + toAmount(item.purchaseTotal);
+      current.budgetSubmittedApprovedTotal += classifiedApproved > 0 ? classifiedApproved : fallbackApproved;
+    }
     grouped.set(key, current);
   }
 
@@ -709,6 +716,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
         ...row,
         totalBudget,
         totalApproved,
+        budgetSubmittedApprovedTotal: toAmount(row.budgetSubmittedApprovedTotal),
         remainingBudget: totalBudget - totalApproved,
         executionRate: totalBudget > 0 ? `${((totalApproved / totalBudget) * 100).toFixed(2)}%` : '',
       };
@@ -717,6 +725,34 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
 };
 
 export const sumRows = (rows, key) => rows.reduce((sum, row) => sum + toAmount(row[key]), 0);
+
+export const buildReportSummaryRows = ({
+  productionCount,
+  nonProductionCount,
+  productionRows,
+  operationRows,
+  approvedDetailRows,
+  budgetShareRows,
+  expenseShareRows,
+  executionRows,
+}) => [
+  ['指标', '数值'],
+  ['生产预算单数', productionCount],
+  ['非生产预算单数', nonProductionCount],
+  ['生产预算明细行数', productionRows.length],
+  ['非生产预算明细行数', operationRows.length],
+  ['实际支出明细行数', approvedDetailRows.length],
+  ['预算占比分组数', budgetShareRows.length],
+  ['支出占比分组数', expenseShareRows.length],
+  ['生产预算金额', sumRows(executionRows, 'productionBudget').toFixed(2)],
+  ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
+  ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
+  ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
+  ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
+  ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
+  ['有提交预算部门支出合计', sumRows(executionRows, 'budgetSubmittedApprovedTotal').toFixed(2)],
+  ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
+];
 
 const percentText = (part, total) => (
   total > 0 ? `${((part / total) * 100).toFixed(2)}%` : ''
@@ -882,6 +918,26 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
     ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
   ];
+
+  executionSheetRows[0].splice(10, 0, '有提交预算部门支出合计');
+  for (let i = 1; i < executionSheetRows.length; i += 1) {
+    executionSheetRows[i].splice(10, 0, executionRows[i - 1].budgetSubmittedApprovedTotal.toFixed(2));
+  }
+
+  summarySheetRows.splice(
+    0,
+    summarySheetRows.length,
+    ...buildReportSummaryRows({
+      productionCount: production.length,
+      nonProductionCount: nonProduction.length,
+      productionRows,
+      operationRows,
+      approvedDetailRows,
+      budgetShareRows,
+      expenseShareRows,
+      executionRows,
+    }),
+  );
 
   const approvedDetailSheetRows = [
     ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '业务动作', '备注'],

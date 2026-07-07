@@ -1,4 +1,4 @@
-import { toAmount, formatMonth } from './xlsxReport';
+import { toAmount, formatMonth } from './xlsxReport.js';
 
 const normalizeDeptName = (value) => String(value || '').trim().replace(/\s+/g, ' ');
 
@@ -44,6 +44,7 @@ function aggregateExecutionRowsByDept(executionRows) {
       deptName,
       budgetTotal: 0,
       approvedTotal: 0,
+      budgetSubmittedApprovedTotal: 0,
       remaining: 0,
       operationApproved: 0,
       purchaseApproved: 0,
@@ -53,6 +54,7 @@ function aggregateExecutionRowsByDept(executionRows) {
 
     current.budgetTotal += toAmount(row.totalBudget);
     current.approvedTotal += toAmount(row.totalApproved);
+    current.budgetSubmittedApprovedTotal += toAmount(row.budgetSubmittedApprovedTotal);
     current.remaining += toAmount(row.remainingBudget);
     current.operationApproved += toAmount(row.operationApproved);
     current.purchaseApproved += toAmount(row.purchaseApproved);
@@ -197,10 +199,11 @@ export function buildExecutionRateData(executionRows) {
  */
 export function buildDeptApprovedComparison(executionRows) {
   return aggregateExecutionRowsByDept(executionRows)
+    .filter((row) => toAmount(row.budgetTotal) > 0)
     .map((row) => ({
       deptName: row.deptName,
       budget: toAmount(row.budgetTotal),
-      approved: toAmount(row.approvedTotal),
+      approved: toAmount(row.budgetSubmittedApprovedTotal),
     }))
     .sort((a, b) => (b.budget + b.approved) - (a.budget + a.approved))
     .slice(0, 10);
@@ -298,6 +301,7 @@ export function buildSummaryStats(productionRows, operationRows, executionRows, 
   const productionTotal = productionRows.reduce((sum, r) => sum + toAmount(r.requestAmount), 0);
   const nonProductionTotal = operationRows.reduce((sum, r) => sum + toAmount(r.amount), 0);
   const approvedTotal = executionRows.reduce((sum, r) => sum + toAmount(r.totalApproved), 0);
+  const budgetSubmittedApprovedTotal = executionRows.reduce((sum, r) => sum + toAmount(r.budgetSubmittedApprovedTotal), 0);
   const remainingTotal = executionRows.reduce((sum, r) => sum + toAmount(r.remainingBudget), 0);
   const overallRate = (productionTotal + nonProductionTotal) > 0
     ? ((approvedTotal / (productionTotal + nonProductionTotal)) * 100).toFixed(1) + '%'
@@ -307,6 +311,7 @@ export function buildSummaryStats(productionRows, operationRows, executionRows, 
     productionTotal: productionTotal.toFixed(2),
     nonProductionTotal: nonProductionTotal.toFixed(2),
     approvedTotal: approvedTotal.toFixed(2),
+    budgetSubmittedApprovedTotal: budgetSubmittedApprovedTotal.toFixed(2),
     remainingTotal: remainingTotal.toFixed(2),
     overallRate,
     productionCount: productionRows.length,
