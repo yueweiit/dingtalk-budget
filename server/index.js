@@ -5,7 +5,21 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: join(__dirname, '.env') });
 
-const requiredEnvVars = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'DINGTALK_APP_KEY', 'DINGTALK_APP_SECRET', 'DINGTALK_PROCESS_CODE'];
+function normalizeApprovalSource(value) {
+  const source = String(value || 'dingtalk').trim().toLowerCase();
+  if (['oa_db', 'dingtalk_oa', 'oa', 'database', 'db'].includes(source)) {
+    return 'oa_db';
+  }
+  return 'dingtalk';
+}
+
+const approvalSource = normalizeApprovalSource(
+  process.env.DINGTALK_SYNC_SOURCE || process.env.APPROVAL_SOURCE || 'dingtalk'
+);
+const requiredEnvVars = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'DINGTALK_PROCESS_CODE'];
+if (approvalSource === 'dingtalk') {
+  requiredEnvVars.push('DINGTALK_APP_KEY', 'DINGTALK_APP_SECRET');
+}
 const missing = requiredEnvVars.filter((key) => !process.env[key]);
 if (missing.length > 0) {
   console.error(`[FATAL] Missing required environment variables: ${missing.join(', ')}`);
@@ -15,6 +29,7 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+console.log(`[CONFIG] Approval source: ${approvalSource}`);
 console.log(`[CONFIG] DINGTALK_APP_KEY: ${process.env.DINGTALK_APP_KEY ? 'loaded (' + process.env.DINGTALK_APP_KEY.substring(0, 6) + '...)' : 'MISSING'}`);
 console.log(`[CONFIG] Working directory: ${process.cwd()}`);
 console.log(`[CONFIG] .env loaded from: ${join(__dirname, '.env')}`);

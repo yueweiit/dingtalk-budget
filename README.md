@@ -108,8 +108,7 @@ Required variables:
 | `PGDATABASE`          | Database name                |
 | `PGUSER`              | Database user                |
 | `PGPASSWORD`          | Database password            |
-| `DINGTALK_APP_KEY`    | DingTalk app key             |
-| `DINGTALK_APP_SECRET` | DingTalk app secret          |
+| `DINGTALK_SYNC_SOURCE` | Approval sync source: `dingtalk` or `oa_db` |
 | `DINGTALK_PROCESS_CODE` | DingTalk approval process code |
 
 Optional variables:
@@ -121,10 +120,15 @@ Optional variables:
 | `API_KEY`               | (disabled)           | Enable API Key auth if set     |
 | `NODE_ENV`              | (empty)              | Set `production` to hide errors|
 | `SYNC_CRON`             | `2 * * * *`          | Sync schedule (cron expression)|
+| `OA_DB_DATABASE`        | `dingtalk_oa`        | Approval archive database name when using `oa_db` source |
 | `DINGTALK_TIMEOUT_MS`   | `15000`              | DingTalk API timeout           |
 | `RETRY_COUNT`           | `3`                  | Max retry attempts             |
 | `CB_FAILURE_THRESHOLD`  | `5`                  | Failures before circuit opens  |
 | `EXPENSE_SYNC_URL`      | (empty)              | Optional expense sync service URL, e.g. `http://localhost:3002` |
+
+When `DINGTALK_SYNC_SOURCE=dingtalk`, `DINGTALK_APP_KEY` and `DINGTALK_APP_SECRET` are required.
+
+When `DINGTALK_SYNC_SOURCE=oa_db`, the budget sync reads approval instances from the `dingtalk_oa` database instead of calling DingTalk directly. In that mode, set `OA_DB_HOST` / `OA_DB_PORT` / `OA_DB_DATABASE` / `OA_DB_USER` / `OA_DB_PASSWORD` if they differ from the main PostgreSQL connection.
 
 ### 3. Install Dependencies
 
