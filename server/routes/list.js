@@ -202,6 +202,7 @@ function splitExpenseCategory(splitType) {
   const type = String(splitType || '').trim().toLowerCase();
   if (type === 'salary' || type === 'social_insurance') return 'salary';
   if (type === 'office' || type === 'office_space') return 'office';
+  if (type === 'individual_income_tax' || type === 'tax') return 'tax';
   return 'management';
 }
 
@@ -226,12 +227,14 @@ function addExpenseBreakdown(map, department, month, values = {}) {
     purchase: 0,
     salary: 0,
     office: 0,
+    tax: 0,
     management: 0,
   };
   current.operation += numberValue(values.operation);
   current.purchase += numberValue(values.purchase);
   current.salary += numberValue(values.salary);
   current.office += numberValue(values.office);
+  current.tax += numberValue(values.tax);
   current.management += numberValue(values.management);
   map.set(key, current);
 }
@@ -334,16 +337,19 @@ function buildAllocatedExpenseItems(rows) {
       managementTotal: 0,
       salaryTotal: 0,
       officeTotal: 0,
+      taxTotal: 0,
     };
 
     const operationExpense = numberValue(row.operation_expense);
     const purchaseExpense = numberValue(row.purchase_expense);
     const salaryExpense = numberValue(row.salary_expense);
     const officeExpense = numberValue(row.office_expense);
+    const taxExpense = numberValue(row.tax_expense);
     current.managementTotal += numberValue(row.management_expense);
     current.salaryTotal += salaryExpense;
     current.officeTotal += officeExpense;
-    current.operationTotal += operationExpense + salaryExpense + officeExpense;
+    current.taxTotal += taxExpense;
+    current.operationTotal += operationExpense + salaryExpense + officeExpense + taxExpense;
     current.purchaseTotal += purchaseExpense;
     current.operationCount += operationExpense + salaryExpense + officeExpense > 0 ? 1 : 0;
     current.purchaseCount += purchaseExpense > 0 ? 1 : 0;
@@ -357,6 +363,7 @@ function buildAllocatedExpenseItems(rows) {
     managementTotal: Number(item.managementTotal.toFixed(2)),
     salaryTotal: Number(item.salaryTotal.toFixed(2)),
     officeTotal: Number(item.officeTotal.toFixed(2)),
+    taxTotal: Number(item.taxTotal.toFixed(2)),
   }));
 }
 
@@ -417,6 +424,7 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
       purchase: 0,
       salary: 0,
       office: 0,
+      tax: 0,
       management: 0,
     };
     const managementExpense = direct.management || direct.operation + direct.purchase;
@@ -425,7 +433,8 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
     const purchaseRounded = Number(direct.purchase.toFixed(2));
     const salaryRounded = Number(direct.salary.toFixed(2));
     const officeRounded = Number(direct.office.toFixed(2));
-    const totalRounded = Number((managementRounded + salaryRounded + officeRounded).toFixed(2));
+    const taxRounded = Number(direct.tax.toFixed(2));
+    const totalRounded = Number((managementRounded + salaryRounded + officeRounded + taxRounded).toFixed(2));
 
     return {
       ...row,
@@ -434,6 +443,7 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
       purchase_expense: purchaseRounded,
       salary_expense: salaryRounded,
       office_expense: officeRounded,
+      tax_expense: taxRounded,
       approved_amount: totalRounded,
       expense_breakdown: {
         management: managementRounded,
@@ -441,6 +451,7 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
         purchase: purchaseRounded,
         salary: salaryRounded,
         office: officeRounded,
+        tax: taxRounded,
         total: totalRounded,
       },
     };
@@ -653,6 +664,7 @@ function extractDeptSplitEntries(item) {
     { col: 'salary_by_department', splitType: 'salary' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
+    { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
   ];
 
   for (const { col, splitType } of splitColumns) {
@@ -685,6 +697,7 @@ function addApprovedExpenseGroup(grouped, department, month, values = {}) {
     managementTotal: 0,
     salaryTotal: 0,
     officeTotal: 0,
+    taxTotal: 0,
   };
 
   current.operationTotal += numberValue(values.operationTotal);
@@ -692,6 +705,7 @@ function addApprovedExpenseGroup(grouped, department, month, values = {}) {
   current.managementTotal += numberValue(values.managementTotal);
   current.salaryTotal += numberValue(values.salaryTotal);
   current.officeTotal += numberValue(values.officeTotal);
+  current.taxTotal += numberValue(values.taxTotal);
   current.operationCount += numberValue(values.operationCount);
   current.purchaseCount += numberValue(values.purchaseCount);
   grouped.set(key, current);
@@ -724,6 +738,7 @@ function roundApprovedExpenseItems(items) {
     managementTotal: Number(numberValue(item.managementTotal).toFixed(2)),
     salaryTotal: Number(numberValue(item.salaryTotal).toFixed(2)),
     officeTotal: Number(numberValue(item.officeTotal).toFixed(2)),
+    taxTotal: Number(numberValue(item.taxTotal).toFixed(2)),
     operationCount: Number(numberValue(item.operationCount).toFixed(2)),
     purchaseCount: Number(numberValue(item.purchaseCount).toFixed(2)),
   }));
@@ -767,6 +782,7 @@ function summarizeApprovedDetails(details) {
       const values = { operationTotal: entry.amount };
       if (category === 'salary') values.salaryTotal = entry.amount;
       else if (category === 'office') values.officeTotal = entry.amount;
+      else if (category === 'tax') values.taxTotal = entry.amount;
       else values.managementTotal = entry.amount;
 
       addApprovedExpenseGroup(grouped, entry.department, month, values);
@@ -858,6 +874,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.bonus_expense,
         o.salary_expense,
         o.administrative_expense,
+        o.individual_income_tax_by_department,
         o.matter_description,
         o.amount,
         NULL::numeric AS detail_summary_amount,
@@ -890,6 +907,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS bonus_expense,
         NULL::varchar AS salary_expense,
         NULL::varchar AS administrative_expense,
+        NULL::jsonb AS individual_income_tax_by_department,
         NULL::text AS matter_description,
         NULL::numeric AS amount,
         p.detail_summary_amount,
@@ -1354,5 +1372,9 @@ router.get('/report', async (req, res) => {
     res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
   }
 });
+
+export {
+  summarizeApprovedDetails,
+};
 
 export default router;

@@ -546,6 +546,7 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
     managementApproved: 0,
     salaryApproved: 0,
     officeApproved: 0,
+    taxApproved: 0,
     budgetSubmittedApprovedTotal: 0,
     operationCount: 0,
     purchaseCount: 0,
@@ -571,6 +572,7 @@ const splitTypeLabel = (value) => {
   if (type === 'salary') return '工资';
   if (type === 'social_insurance') return '社保公积金';
   if (type === 'office_space') return '办公场地';
+  if (type === 'individual_income_tax') return '个税';
   return value || '部门拆分';
 };
 
@@ -598,6 +600,7 @@ const extractExpenseDeptSplits = (item) => {
     { col: 'salary_by_department', splitType: 'salary' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
+    { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
   ];
 
   for (const { col, splitType } of splitColumns) {
@@ -685,6 +688,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       managementApproved: 0,
       salaryApproved: 0,
       officeApproved: 0,
+      taxApproved: 0,
       budgetSubmittedApprovedTotal: 0,
       operationCount: 0,
       purchaseCount: 0,
@@ -695,10 +699,11 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
     current.managementApproved += toAmount(item.managementTotal);
     current.salaryApproved += toAmount(item.salaryTotal);
     current.officeApproved += toAmount(item.officeTotal);
+    current.taxApproved += toAmount(item.taxTotal);
     current.operationCount += Number(item.operationCount || 0);
     current.purchaseCount += Number(item.purchaseCount || 0);
     if ((toAmount(current.productionBudget) + toAmount(current.nonProductionBudget)) > 0) {
-      const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.officeTotal);
+      const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.officeTotal) + toAmount(item.taxTotal);
       const fallbackApproved = toAmount(item.operationTotal) + toAmount(item.purchaseTotal);
       current.budgetSubmittedApprovedTotal += classifiedApproved > 0 ? classifiedApproved : fallbackApproved;
     }
@@ -708,7 +713,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
   return [...grouped.values()]
     .map((row) => {
       const totalBudget = row.productionBudget + row.nonProductionBudget;
-      const classifiedApproved = row.managementApproved + row.salaryApproved + row.officeApproved;
+      const classifiedApproved = row.managementApproved + row.salaryApproved + row.officeApproved + row.taxApproved;
       const totalApproved = classifiedApproved > 0
         ? classifiedApproved
         : row.operationApproved + row.purchaseApproved;
@@ -749,6 +754,7 @@ export const buildReportSummaryRows = ({
   ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
   ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
   ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
+  ['个税支出金额', sumRows(executionRows, 'taxApproved').toFixed(2)],
   ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
   ['有提交预算部门支出合计', sumRows(executionRows, 'budgetSubmittedApprovedTotal').toFixed(2)],
   ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
@@ -882,7 +888,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const executionSheetRows = [
-    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '办公场地支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
+    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '办公场地支出', '个税支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
     ...executionRows.map((row, index) => [
       index + 1,
       row.deptName,
@@ -893,6 +899,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.managementApproved.toFixed(2),
       row.salaryApproved.toFixed(2),
       row.officeApproved.toFixed(2),
+      row.taxApproved.toFixed(2),
       row.totalApproved.toFixed(2),
       row.remainingBudget.toFixed(2),
       row.executionRate,
