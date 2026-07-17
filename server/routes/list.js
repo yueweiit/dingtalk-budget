@@ -157,6 +157,36 @@ function normalizeRegion(value) {
   return '';
 }
 
+function isChinaExecutionRegion(value) {
+  return normalizeRegion(value) === 'CN';
+}
+
+function isChinaOnlyDepartment(department) {
+  const departmentKey = compactDept(department);
+  return departmentKey.startsWith('obg') || departmentKey.startsWith('sg');
+}
+
+function shouldIncludeDepartmentExpense(department, executionRegion) {
+  return !isChinaOnlyDepartment(department) || isChinaExecutionRegion(executionRegion);
+}
+
+function chinaExecutionRegionWhere(alias) {
+  const region = `COALESCE(${alias}.execution_region, '')`;
+  return `(
+    LOWER(${region}) LIKE '%china%'
+    OR ${region} LIKE '%中国%'
+    OR LOWER(BTRIM(${region})) = 'cn'
+  )`;
+}
+
+function chinaOnlyDepartmentWhere(alias) {
+  const departmentKey = deptPartitionExprFor(alias);
+  return `(
+    (${departmentKey} NOT LIKE 'obg%' AND ${departmentKey} NOT LIKE 'sg%')
+    OR ${chinaExecutionRegionWhere(alias)}
+  )`;
+}
+
 function rowRegion(row) {
   return normalizeRegion(row?.execution_region);
 }
@@ -208,7 +238,7 @@ function splitExpenseCategory(splitType) {
 
 function addDirectExpense(map, department, month, item, amount) {
   const value = numberValue(amount);
-  if (value <= 0) return;
+  if (value <= 0 || !shouldIncludeDepartmentExpense(department, item?.execution_region)) return;
   if (item?.expense_kind === 'purchase') {
     addExpenseBreakdown(map, department, month, { purchase: value, management: value });
     return;
@@ -391,17 +421,21 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
     : await fetchExpenseDeptSplits(details);
   const splitBusinessIds = new Set(splitRows.map((row) => String(row.business_id || '').trim()).filter(Boolean));
   const detailMonthMap = new Map();
+  const detailByBusinessId = new Map();
   for (const item of details) {
     const businessId = String(item.business_id || '').trim();
     if (!businessId) continue;
     const month = item.query_month || approvedDetailMonth(item);
     if (month) detailMonthMap.set(businessId, month);
+    detailByBusinessId.set(businessId, item);
   }
 
   for (const row of splitRows) {
     const businessId = String(row.business_id || '').trim();
     const month = detailMonthMap.get(businessId);
     if (!month) continue;
+    const item = detailByBusinessId.get(businessId);
+    if (!shouldIncludeDepartmentExpense(row.department, item?.execution_region)) continue;
     const category = splitExpenseCategory(row.split_type);
     addExpenseBreakdown(expenseMap, row.department, month, {
       [category]: numberValue(row.amount),
@@ -730,6 +764,21 @@ function splitRowsOf(item) {
   }));
 }
 
+function filterExpenseDetailsForReport(details) {
+  return (details || []).flatMap((item) => {
+    const splits = Array.isArray(item?.expense_splits) ? item.expense_splits : [];
+    if (splits.length === 0) {
+      return shouldIncludeDepartmentExpense(expenseDepartment(item), item.execution_region) ? [item] : [];
+    }
+
+    const visibleSplits = splits.filter((entry) => (
+      shouldIncludeDepartmentExpense(entry.department, item.execution_region)
+    ));
+    if (visibleSplits.length === 0) return [];
+    return [{ ...item, expense_splits: visibleSplits }];
+  });
+}
+
 function roundApprovedExpenseItems(items) {
   return items.map((item) => ({
     ...item,
@@ -757,6 +806,7 @@ function summarizeApprovedDetails(details) {
     const directDepartment = expenseDepartment(item);
 
     if (item.expense_kind === 'purchase') {
+      if (!shouldIncludeDepartmentExpense(directDepartment, item.execution_region)) continue;
       addApprovedExpenseGroup(grouped, directDepartment, month, {
         purchaseTotal: amount,
         managementTotal: amount,
@@ -767,6 +817,7 @@ function summarizeApprovedDetails(details) {
 
     const splits = splitRowsOf(item);
     if (splits.length === 0) {
+      if (!shouldIncludeDepartmentExpense(directDepartment, item.execution_region)) continue;
       addApprovedExpenseGroup(grouped, directDepartment, month, {
         operationTotal: amount,
         managementTotal: amount,
@@ -778,6 +829,8 @@ function summarizeApprovedDetails(details) {
     const touchedDepartments = new Set();
     let classifiedSplitTotal = 0;
     for (const entry of splits) {
+      classifiedSplitTotal += entry.amount;
+      if (!shouldIncludeDepartmentExpense(entry.department, item.execution_region)) continue;
       const category = splitExpenseCategory(entry.category);
       const values = { operationTotal: entry.amount };
       if (category === 'salary') values.salaryTotal = entry.amount;
@@ -787,11 +840,10 @@ function summarizeApprovedDetails(details) {
 
       addApprovedExpenseGroup(grouped, entry.department, month, values);
       touchedDepartments.add(compactDept(entry.department));
-      classifiedSplitTotal += entry.amount;
     }
 
     const remainder = Number((amount - classifiedSplitTotal).toFixed(2));
-    if (remainder > 0.01) {
+    if (remainder > 0.01 && shouldIncludeDepartmentExpense(directDepartment, item.execution_region)) {
       addApprovedExpenseGroup(grouped, directDepartment, month, {
         operationTotal: remainder,
         managementTotal: remainder,
@@ -854,6 +906,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.business_id,
         o.process_instance_id,
         o.request_date,
+        o.execution_region,
         o.applicant_department,
         o.creator_department,
         o.applicant_department AS query_department,
@@ -887,6 +940,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         p.business_id,
         p.process_instance_id,
         p.request_date,
+        p.execution_region,
         p.applicant_department,
         p.creator_department,
         p.applicant_department AS query_department,
@@ -953,7 +1007,12 @@ async function fetchApprovedExpenseSummaryFresh(dateRange) {
   }
 
   const details = await attachExpenseSplitsToDetails([...detailMap.values()]);
-  return { items: summarizeApprovedDetails(details), details, warnings };
+  return {
+    items: summarizeApprovedDetails(details),
+    details,
+    reportDetails: filterExpenseDetailsForReport(details),
+    warnings,
+  };
 }
 
 async function fetchApprovedExpenseSummary(dateRange) {
@@ -987,6 +1046,8 @@ function buildBudgetWhere(alias, { startDate, endDate, status } = {}) {
     endDate,
     budgetMonthExprFor(alias)
   ));
+
+  whereClause += ` AND ${chinaOnlyDepartmentWhere(alias)}`;
 
   if (status) {
     whereClause += ` AND ${alias}.status = $${paramIndex}`;
@@ -1277,6 +1338,7 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)
          FROM production_budget p
          WHERE DATE(p.create_time) = $1
+           AND ${chinaOnlyDepartmentWhere('p')}
            AND (
              EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
              OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
@@ -1285,6 +1347,7 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)
          FROM non_production_budget n
          WHERE DATE(n.create_time) = $1
+           AND ${chinaOnlyDepartmentWhere('n')}
            AND (
              EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
              OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
@@ -1334,11 +1397,13 @@ router.get('/report', async (req, res) => {
     let warnings = [];
     let approvedItems = null;
     let approvedDetails = null;
+    let reportApprovedDetails = null;
     const shouldIncludeApproved = String(includeApproved || '') === '1';
     if (shouldIncludeApproved) {
       const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
       approvedItems = approved.items;
       approvedDetails = approved.details;
+      reportApprovedDetails = approved.reportDetails;
       warnings = approved.warnings;
     }
 
@@ -1359,7 +1424,7 @@ router.get('/report', async (req, res) => {
 
     if (shouldIncludeApproved) {
       responseData.approvedExpenses = approvedItems;
-      responseData.approvedExpenseDetails = approvedDetails;
+      responseData.approvedExpenseDetails = reportApprovedDetails;
     }
 
     res.json({
@@ -1374,6 +1439,10 @@ router.get('/report', async (req, res) => {
 });
 
 export {
+  buildBudgetWhere,
+  isChinaExecutionRegion,
+  isChinaOnlyDepartment,
+  shouldIncludeDepartmentExpense,
   summarizeApprovedDetails,
 };
 
