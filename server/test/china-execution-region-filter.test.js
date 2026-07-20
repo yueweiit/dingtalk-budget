@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import {
   buildBudgetWhere,
+  buildBudgetedDepartmentMonthSet,
   isChinaExecutionRegion,
-  isChinaOnlyDepartment,
   shouldIncludeDepartmentExpense,
   summarizeApprovedDetails,
 } from '../routes/list.js';
@@ -18,28 +18,34 @@ test('recognizes China execution region values', () => {
   assert.equal(isChinaExecutionRegion(null), false);
 });
 
-test('only OBG and SG departments require China execution region', () => {
-  const obg = 'OBG 线上业务组Grupo de negocios en linea';
-  const sales = 'SG 销售小组Grupo de ventas';
+test('departments with a budget amount require China execution region', () => {
+  const department = 'IT&SC 信息技术和体系管理';
+  const budgetedDepartments = buildBudgetedDepartmentMonthSet([
+    { dept_name: department, budget_month: '2026-07', total_amount: 1 },
+  ]);
 
-  assert.equal(isChinaOnlyDepartment(obg), true);
-  assert.equal(isChinaOnlyDepartment(sales), true);
-  assert.equal(isChinaOnlyDepartment('IT&SC 信息技术和体系管理'), false);
-  assert.equal(shouldIncludeDepartmentExpense(obg, '墨西哥Mexico'), false);
-  assert.equal(shouldIncludeDepartmentExpense(obg, '中国China'), true);
-  assert.equal(shouldIncludeDepartmentExpense('IT&SC 信息技术和体系管理', '墨西哥Mexico'), true);
+  assert.equal(shouldIncludeDepartmentExpense(department, '2026-07', '墨西哥Mexico', budgetedDepartments), false);
+  assert.equal(shouldIncludeDepartmentExpense(department, '2026-07', '中国China', budgetedDepartments), true);
+  assert.equal(shouldIncludeDepartmentExpense(department, '2026-08', '墨西哥Mexico', budgetedDepartments), true);
 });
 
-test('budget list queries restrict China execution region only for OBG and SG', () => {
+test('budget list queries restrict China execution region for nonzero budget amounts', () => {
   const { whereClause } = buildBudgetWhere('n');
 
   assert.match(whereClause, /n\.execution_region/i);
   assert.match(whereClause, /china/i);
-  assert.match(whereClause, /obg/i);
-  assert.match(whereClause, /sg/i);
+  assert.match(whereClause, /n\.total_amount/i);
+  assert.match(whereClause, /n\.budget_amount/i);
 });
 
-test('Mexico split is excluded only for OBG and keeps other departments', () => {
+test('Mexico split is excluded for a department with a budget and keeps other departments', () => {
+  const budgetedDepartments = buildBudgetedDepartmentMonthSet([
+    {
+      dept_name: 'OBG 线上业务组Grupo de negocios en linea',
+      budget_month: '2026-07',
+      total_amount: 1,
+    },
+  ]);
   const [item] = summarizeApprovedDetails([
     {
       expense_kind: 'operation',
@@ -53,7 +59,7 @@ test('Mexico split is excluded only for OBG and keeps other departments', () => 
         { department: 'IT&SC 信息技术和体系管理', amount: 60, split_type: 'office_space' },
       ],
     },
-  ]);
+  ], budgetedDepartments);
 
   assert.equal(item.department, 'IT&SC 信息技术和体系管理');
   assert.equal(item.officeTotal, 60);

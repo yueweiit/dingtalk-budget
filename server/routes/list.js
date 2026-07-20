@@ -161,13 +161,33 @@ function isChinaExecutionRegion(value) {
   return normalizeRegion(value) === 'CN';
 }
 
-function isChinaOnlyDepartment(department) {
+function budgetedDepartmentMonthKey(department, month) {
   const departmentKey = compactDept(department);
-  return departmentKey.startsWith('obg') || departmentKey.startsWith('sg');
+  const budgetMonth = formatMonth(month);
+  return departmentKey && budgetMonth ? `${departmentKey}__${budgetMonth}` : '';
 }
 
-function shouldIncludeDepartmentExpense(department, executionRegion) {
-  return !isChinaOnlyDepartment(department) || isChinaExecutionRegion(executionRegion);
+function budgetAmountOf(row) {
+  return Math.max(
+    numberValue(row?.total_amount),
+    numberValue(row?.budget_amount),
+    numberValue(row?.monthly_budget_amount)
+  );
+}
+
+function buildBudgetedDepartmentMonthSet(rows) {
+  const result = new Set();
+  for (const row of rows || []) {
+    if (budgetAmountOf(row) <= 0) continue;
+    const key = budgetedDepartmentMonthKey(row?.dept_name, budgetMonthOf(row));
+    if (key) result.add(key);
+  }
+  return result;
+}
+
+function shouldIncludeDepartmentExpense(department, month, executionRegion, budgetedDepartmentMonths) {
+  const key = budgetedDepartmentMonthKey(department, month);
+  return !key || !budgetedDepartmentMonths?.has(key) || isChinaExecutionRegion(executionRegion);
 }
 
 function chinaExecutionRegionWhere(alias) {
@@ -179,10 +199,13 @@ function chinaExecutionRegionWhere(alias) {
   )`;
 }
 
-function chinaOnlyDepartmentWhere(alias) {
-  const departmentKey = deptPartitionExprFor(alias);
+function submittedBudgetChinaWhere(alias) {
+  const amountColumns = alias === 'p'
+    ? [`${alias}.total_amount`, `${alias}.monthly_budget_amount`]
+    : [`${alias}.total_amount`, `${alias}.budget_amount`];
+  const submittedAmount = `GREATEST(${amountColumns.map((column) => `COALESCE(${column}, 0)`).join(', ')})`;
   return `(
-    (${departmentKey} NOT LIKE 'obg%' AND ${departmentKey} NOT LIKE 'sg%')
+    ${submittedAmount} <= 0
     OR ${chinaExecutionRegionWhere(alias)}
   )`;
 }
@@ -236,9 +259,9 @@ function splitExpenseCategory(splitType) {
   return 'management';
 }
 
-function addDirectExpense(map, department, month, item, amount) {
+function addDirectExpense(map, department, month, item, amount, budgetedDepartmentMonths) {
   const value = numberValue(amount);
-  if (value <= 0 || !shouldIncludeDepartmentExpense(department, item?.execution_region)) return;
+  if (value <= 0 || !shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) return;
   if (item?.expense_kind === 'purchase') {
     addExpenseBreakdown(map, department, month, { purchase: value, management: value });
     return;
@@ -398,7 +421,12 @@ function buildAllocatedExpenseItems(rows) {
 }
 
 /** 按三类预算口径为有效预算流程挂接支出金额 */
-async function attachExpenseAmounts(records, { startDate, endDate, approvedDetails } = {}) {
+async function attachExpenseAmounts(records, {
+  startDate,
+  endDate,
+  approvedDetails,
+  budgetedDepartmentMonths = new Set(),
+} = {}) {
   if (!records || records.length === 0) return records || [];
 
   let details = Array.isArray(approvedDetails) ? approvedDetails : [];
@@ -435,7 +463,7 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
     const month = detailMonthMap.get(businessId);
     if (!month) continue;
     const item = detailByBusinessId.get(businessId);
-    if (!shouldIncludeDepartmentExpense(row.department, item?.execution_region)) continue;
+    if (!shouldIncludeDepartmentExpense(row.department, month, item?.execution_region, budgetedDepartmentMonths)) continue;
     const category = splitExpenseCategory(row.split_type);
     addExpenseBreakdown(expenseMap, row.department, month, {
       [category]: numberValue(row.amount),
@@ -448,7 +476,7 @@ async function attachExpenseAmounts(records, { startDate, endDate, approvedDetai
     if (!month || amount <= 0) continue;
     const businessId = String(item.business_id || '').trim();
     if (businessId && splitBusinessIds.has(businessId)) continue;
-    addDirectExpense(expenseMap, expenseDepartment(item), month, item, amount);
+    addDirectExpense(expenseMap, expenseDepartment(item), month, item, amount, budgetedDepartmentMonths);
   }
 
   return prepared.map((row, index) => {
@@ -764,15 +792,18 @@ function splitRowsOf(item) {
   }));
 }
 
-function filterExpenseDetailsForReport(details) {
+function filterExpenseDetailsForReport(details, budgetedDepartmentMonths = new Set()) {
   return (details || []).flatMap((item) => {
+    const month = item.query_month || approvedDetailMonth(item);
     const splits = Array.isArray(item?.expense_splits) ? item.expense_splits : [];
     if (splits.length === 0) {
-      return shouldIncludeDepartmentExpense(expenseDepartment(item), item.execution_region) ? [item] : [];
+      return shouldIncludeDepartmentExpense(
+        expenseDepartment(item), month, item.execution_region, budgetedDepartmentMonths
+      ) ? [item] : [];
     }
 
     const visibleSplits = splits.filter((entry) => (
-      shouldIncludeDepartmentExpense(entry.department, item.execution_region)
+      shouldIncludeDepartmentExpense(entry.department, month, item.execution_region, budgetedDepartmentMonths)
     ));
     if (visibleSplits.length === 0) return [];
     return [{ ...item, expense_splits: visibleSplits }];
@@ -793,7 +824,7 @@ function roundApprovedExpenseItems(items) {
   }));
 }
 
-function summarizeApprovedDetails(details) {
+function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set()) {
   const grouped = new Map();
 
   for (const item of details) {
@@ -806,7 +837,7 @@ function summarizeApprovedDetails(details) {
     const directDepartment = expenseDepartment(item);
 
     if (item.expense_kind === 'purchase') {
-      if (!shouldIncludeDepartmentExpense(directDepartment, item.execution_region)) continue;
+      if (!shouldIncludeDepartmentExpense(directDepartment, month, item.execution_region, budgetedDepartmentMonths)) continue;
       addApprovedExpenseGroup(grouped, directDepartment, month, {
         purchaseTotal: amount,
         managementTotal: amount,
@@ -817,7 +848,7 @@ function summarizeApprovedDetails(details) {
 
     const splits = splitRowsOf(item);
     if (splits.length === 0) {
-      if (!shouldIncludeDepartmentExpense(directDepartment, item.execution_region)) continue;
+      if (!shouldIncludeDepartmentExpense(directDepartment, month, item.execution_region, budgetedDepartmentMonths)) continue;
       addApprovedExpenseGroup(grouped, directDepartment, month, {
         operationTotal: amount,
         managementTotal: amount,
@@ -830,7 +861,7 @@ function summarizeApprovedDetails(details) {
     let classifiedSplitTotal = 0;
     for (const entry of splits) {
       classifiedSplitTotal += entry.amount;
-      if (!shouldIncludeDepartmentExpense(entry.department, item.execution_region)) continue;
+      if (!shouldIncludeDepartmentExpense(entry.department, month, item.execution_region, budgetedDepartmentMonths)) continue;
       const category = splitExpenseCategory(entry.category);
       const values = { operationTotal: entry.amount };
       if (category === 'salary') values.salaryTotal = entry.amount;
@@ -843,7 +874,9 @@ function summarizeApprovedDetails(details) {
     }
 
     const remainder = Number((amount - classifiedSplitTotal).toFixed(2));
-    if (remainder > 0.01 && shouldIncludeDepartmentExpense(directDepartment, item.execution_region)) {
+    if (remainder > 0.01 && shouldIncludeDepartmentExpense(
+      directDepartment, month, item.execution_region, budgetedDepartmentMonths
+    )) {
       addApprovedExpenseGroup(grouped, directDepartment, month, {
         operationTotal: remainder,
         managementTotal: remainder,
@@ -1033,7 +1066,7 @@ async function fetchApprovedExpenseSummary(dateRange) {
   return value;
 }
 
-function buildBudgetWhere(alias, { startDate, endDate, status } = {}) {
+function buildBudgetWhere(alias, { startDate, endDate, status } = {}, { filterExecutionRegion = true } = {}) {
   let whereClause = 'WHERE 1=1';
   const params = [];
   let paramIndex = 1;
@@ -1047,7 +1080,9 @@ function buildBudgetWhere(alias, { startDate, endDate, status } = {}) {
     budgetMonthExprFor(alias)
   ));
 
-  whereClause += ` AND ${chinaOnlyDepartmentWhere(alias)}`;
+  if (filterExecutionRegion) {
+    whereClause += ` AND ${submittedBudgetChinaWhere(alias)}`;
+  }
 
   if (status) {
     whereClause += ` AND ${alias}.status = $${paramIndex}`;
@@ -1174,8 +1209,8 @@ function nonProductionBudgetCte(whereClause) {
   `;
 }
 
-async function fetchProductionBudgetRows(client, filters = {}, paging = null) {
-  const { whereClause, params, paramIndex } = buildBudgetWhere('p', filters);
+async function fetchProductionBudgetRows(client, filters = {}, paging = null, options = {}) {
+  const { whereClause, params, paramIndex } = buildBudgetWhere('p', filters, options);
   const cte = productionBudgetCte(whereClause);
   const limitSql = paging ? ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}` : '';
   const queryParams = paging ? [...params, paging.limit, paging.offset] : params;
@@ -1202,8 +1237,8 @@ async function countProductionBudgetRows(client, filters = {}) {
   return result.rows[0]?.count || 0;
 }
 
-async function fetchNonProductionBudgetRows(client, filters = {}, paging = null) {
-  const { whereClause, params, paramIndex } = buildBudgetWhere('n', filters);
+async function fetchNonProductionBudgetRows(client, filters = {}, paging = null, options = {}) {
+  const { whereClause, params, paramIndex } = buildBudgetWhere('n', filters, options);
   const cte = nonProductionBudgetCte(whereClause);
   const limitSql = paging ? ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}` : '';
   const queryParams = paging ? [...params, paging.limit, paging.offset] : params;
@@ -1230,6 +1265,14 @@ async function countNonProductionBudgetRows(client, filters = {}) {
   return result.rows[0]?.count || 0;
 }
 
+async function fetchBudgetedDepartmentMonthSet(client, filters = {}) {
+  const [productionRows, nonProductionRows] = await Promise.all([
+    fetchProductionBudgetRows(client, filters, null, { filterExecutionRegion: false }),
+    fetchNonProductionBudgetRows(client, filters, null, { filterExecutionRegion: false }),
+  ]);
+  return buildBudgetedDepartmentMonthSet([...productionRows, ...nonProductionRows]);
+}
+
 // GET /api/list/production - 获取生产预算列表
 router.get('/production', async (req, res) => {
   try {
@@ -1237,11 +1280,16 @@ router.get('/production', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const db = { query };
     const filters = { startDate, endDate, status };
-    const [dataRows, total] = await Promise.all([
+    const [dataRows, total, budgetedDepartmentMonths] = await Promise.all([
       fetchProductionBudgetRows(db, filters, { limit: Number(pageSize), offset }),
       countProductionBudgetRows(db, filters),
+      fetchBudgetedDepartmentMonthSet(db, filters),
     ]);
-    const rowsWithExpense = await attachExpenseAmounts(dataRows, { startDate, endDate });
+    const rowsWithExpense = await attachExpenseAmounts(dataRows, {
+      startDate,
+      endDate,
+      budgetedDepartmentMonths,
+    });
 
     res.json({
       success: true,
@@ -1263,11 +1311,16 @@ router.get('/non-production', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const db = { query };
     const filters = { startDate, endDate, status };
-    const [dataRows, total] = await Promise.all([
+    const [dataRows, total, budgetedDepartmentMonths] = await Promise.all([
       fetchNonProductionBudgetRows(db, filters, { limit: Number(pageSize), offset }),
       countNonProductionBudgetRows(db, filters),
+      fetchBudgetedDepartmentMonthSet(db, filters),
     ]);
-    const rowsWithExpense = await attachExpenseAmounts(dataRows, { startDate, endDate });
+    const rowsWithExpense = await attachExpenseAmounts(dataRows, {
+      startDate,
+      endDate,
+      budgetedDepartmentMonths,
+    });
 
     res.json({
       success: true,
@@ -1338,7 +1391,7 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)
          FROM production_budget p
          WHERE DATE(p.create_time) = $1
-           AND ${chinaOnlyDepartmentWhere('p')}
+           AND ${submittedBudgetChinaWhere('p')}
            AND (
              EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
              OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
@@ -1347,7 +1400,7 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)
          FROM non_production_budget n
          WHERE DATE(n.create_time) = $1
-           AND ${chinaOnlyDepartmentWhere('n')}
+           AND ${submittedBudgetChinaWhere('n')}
            AND (
              EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
              OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
@@ -1386,10 +1439,14 @@ router.get('/report', async (req, res) => {
 
     let productionRowsRaw;
     let nonProductionRowsRaw;
+    let budgetedDepartmentMonths;
     try {
       const filters = { startDate, endDate };
-      productionRowsRaw = await fetchProductionBudgetRows(exportClient, filters);
-      nonProductionRowsRaw = await fetchNonProductionBudgetRows(exportClient, filters);
+      [productionRowsRaw, nonProductionRowsRaw, budgetedDepartmentMonths] = await Promise.all([
+        fetchProductionBudgetRows(exportClient, filters),
+        fetchNonProductionBudgetRows(exportClient, filters),
+        fetchBudgetedDepartmentMonthSet(exportClient, filters),
+      ]);
     } finally {
       await exportClient.end();
     }
@@ -1401,19 +1458,29 @@ router.get('/report', async (req, res) => {
     const shouldIncludeApproved = String(includeApproved || '') === '1';
     if (shouldIncludeApproved) {
       const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
-      approvedItems = approved.items;
+      approvedItems = summarizeApprovedDetails(approved.details, budgetedDepartmentMonths);
       approvedDetails = approved.details;
-      reportApprovedDetails = approved.reportDetails;
+      reportApprovedDetails = filterExpenseDetailsForReport(approved.details, budgetedDepartmentMonths);
       warnings = approved.warnings;
     }
 
     const productionRows = await attachExpenseAmounts(
       productionRowsRaw,
-      { startDate, endDate, approvedDetails: shouldIncludeApproved ? approvedDetails : [] }
+      {
+        startDate,
+        endDate,
+        approvedDetails: shouldIncludeApproved ? approvedDetails : [],
+        budgetedDepartmentMonths,
+      }
     );
     const nonProductionRows = await attachExpenseAmounts(
       nonProductionRowsRaw,
-      { startDate, endDate, approvedDetails: shouldIncludeApproved ? approvedDetails : [] }
+      {
+        startDate,
+        endDate,
+        approvedDetails: shouldIncludeApproved ? approvedDetails : [],
+        budgetedDepartmentMonths,
+      }
     );
     const responseData = {
       production: productionRows,
@@ -1440,8 +1507,8 @@ router.get('/report', async (req, res) => {
 
 export {
   buildBudgetWhere,
+  buildBudgetedDepartmentMonthSet,
   isChinaExecutionRegion,
-  isChinaOnlyDepartment,
   shouldIncludeDepartmentExpense,
   summarizeApprovedDetails,
 };
