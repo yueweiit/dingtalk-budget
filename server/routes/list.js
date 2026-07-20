@@ -521,7 +521,17 @@ async function attachExpenseAmounts(records, {
 }
 
 function approvedDetailMonth(item) {
-  return formatMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
+  return formatUtcMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
+}
+
+function formatUtcMonth(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}$/.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.slice(0, 7);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return formatMonth(value);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 const excludedExpenseStatusKeywords = [
@@ -907,6 +917,10 @@ function expandMonthDate(value, isEndDate = false) {
   return `${match[1]}-${match[2]}-01`;
 }
 
+function approvalExpenseDateExpr(alias) {
+  return `((` + `${alias}.source_created_at AT TIME ZONE 'UTC')::date)`;
+}
+
 async function fetchApprovalExpenseDetails(dateRange) {
   const params = [];
   const startDate = expandMonthDate(dateRange.startDate, false);
@@ -915,7 +929,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
   const endParam = endDate ? params.push(endDate) : null;
 
   const dateWhereFor = (alias) => {
-    const dateExpr = `COALESCE(${alias}.source_created_at::date, ${alias}.request_date, ${alias}.approval_completed_at::date)`;
+    const dateExpr = `COALESCE(${approvalExpenseDateExpr(alias)}, ${alias}.request_date, (${alias}.approval_completed_at AT TIME ZONE 'UTC')::date)`;
     let whereClause = 'WHERE 1=1';
     if (startParam) whereClause += ` AND ${dateExpr} >= $${startParam}::date`;
     if (endParam) whereClause += ` AND ${dateExpr} <= $${endParam}::date`;
@@ -1506,6 +1520,7 @@ router.get('/report', async (req, res) => {
 });
 
 export {
+  approvalExpenseDateExpr,
   buildBudgetWhere,
   buildBudgetedDepartmentMonthSet,
   isChinaExecutionRegion,

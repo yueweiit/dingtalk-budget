@@ -1,3 +1,5 @@
+import { formatUtcDate, formatUtcMonth } from './utcDate.js';
+
 const textEncoder = new TextEncoder();
 
 const escapeXml = (value) => String(value ?? '')
@@ -75,25 +77,10 @@ const amountValue = (row) => firstValue(row, [
   'originalAmount',
 ], '');
 
-const formatDate = (value) => {
-  if (!value) return '';
-  const raw = String(value).trim();
-  if (/^\d{4}-\d{2}$/.test(raw)) return raw;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const pad = (number) => String(number).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-};
+const formatDate = formatUtcDate;
 
 export const formatMonth = (value) => {
-  if (!value) return '';
-  const raw = String(value).trim();
-  if (/^\d{4}-\d{2}$/.test(raw)) return raw;
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.substring(0, 7);
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return raw;
-  const pad = (number) => String(number).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+  return formatUtcMonth(value);
 };
 
 const normalizeCurrency = (value) => {

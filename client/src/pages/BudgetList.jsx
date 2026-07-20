@@ -8,6 +8,7 @@ import * as echarts from 'echarts';
 
 import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
+import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 
 const styles = {
   page: {
@@ -364,9 +365,7 @@ const tabs = [
 ];
 
 const formatDateTime = (value) => {
-  if (!value) return '-';
-  const date = dayjs(value);
-  return date.isValid() ? date.format('YYYY-MM-DD HH:mm') : String(value);
+  return formatUtcDateTime(value);
 };
 
 const getStatusStyle = (status = '') => {
@@ -418,8 +417,7 @@ function detailMonthOf(item) {
   if (item?.query_month) return String(item.query_month).trim();
   const date = firstNonEmpty(item?.source_created_at, item?.request_date, item?.approval_completed_at);
   if (!date) return '';
-  const parsed = dayjs(date);
-  return parsed.isValid() ? parsed.format('YYYY-MM') : '';
+  return formatUtcMonth(date);
 }
 
 function detailDepartmentOf(item) {
