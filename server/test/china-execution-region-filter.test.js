@@ -29,6 +29,23 @@ test('departments with a budget amount require China execution region', () => {
   assert.equal(shouldIncludeDepartmentExpense(department, '2026-08', '墨西哥Mexico', budgetedDepartments), true);
 });
 
+test('PD&PM 中国支出带 CN 标识时仍按同一预算部门执行地区筛选', () => {
+  const budgetDepartment = 'PD&PM 产品和生产管理Administracion de productos y produccion';
+  const chinaExpenseDepartment = 'PD&PM 产品和生产管理CN Administracion de productos y produccion';
+  const budgetedDepartments = buildBudgetedDepartmentMonthSet([
+    { dept_name: budgetDepartment, budget_month: '2026-06', total_amount: 1 },
+  ]);
+
+  assert.equal(
+    shouldIncludeDepartmentExpense(chinaExpenseDepartment, '2026-06', '墨西哥Mexico', budgetedDepartments),
+    false,
+  );
+  assert.equal(
+    shouldIncludeDepartmentExpense(chinaExpenseDepartment, '2026-06', '中国China', budgetedDepartments),
+    true,
+  );
+});
+
 test('budget list queries restrict China execution region for nonzero budget amounts', () => {
   const { whereClause } = buildBudgetWhere('n');
 

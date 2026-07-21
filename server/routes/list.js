@@ -106,6 +106,11 @@ function compactDept(value) {
     .toLowerCase()
     .replace(/[\s()（）\-_/\\,.;:，。；：&]+/g, '');
 
+  // 同一 PD&PM 部门在中国支出来源中会额外出现 CN 标识。
+  if (key.startsWith('pdpm')) {
+    return 'dept_pdpm';
+  }
+
   if (
     key.includes('悦为智能') ||
     key.includes('ywtechai') ||
