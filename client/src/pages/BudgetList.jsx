@@ -8,6 +8,7 @@ import * as echarts from 'echarts';
 
 import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
+import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 
 const styles = {
@@ -1199,10 +1200,13 @@ export default function BudgetList({ onGoToVisual }) {
 
                       <div style={styles.expenseDetails}>
                         <h3 style={{ margin: '4px 0 0', fontSize: 16, fontWeight: 600 }}>支出明细</h3>
-                        <ExpenseDetailSection title="运营/采购支出明细" rows={expenseSections.operationPurchase} />
-                        <ExpenseDetailSection title="工资/社保明细" rows={expenseSections.salary} />
-                        <ExpenseDetailSection title="办公场地明细" rows={expenseSections.office} />
-                        <ExpenseDetailSection title="个税明细" rows={expenseSections.tax} />
+                        {expenseDetailSectionDefinitions.map((section) => (
+                          <ExpenseDetailSection
+                            key={section.key}
+                            title={section.title}
+                            rows={expenseSections[section.key] || []}
+                          />
+                        ))}
                       </div>
                     </div>
                   );
