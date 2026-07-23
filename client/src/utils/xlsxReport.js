@@ -1,4 +1,5 @@
 import { formatUtcDate, formatUtcMonth } from './utcDate.js';
+import { departmentDisplayName, departmentIdentityKey } from './departmentIdentity.js';
 
 const textEncoder = new TextEncoder();
 
@@ -126,6 +127,10 @@ export const buildOperationRows = (records) => {
           applicationDate: formatDate(record.application_date),
           budgetMonth: formatMonth(record.budget_month || record.declaration_month),
           deptName: record.dept_name,
+          deptId: record.dept_id,
+          departmentIdentityKey: departmentIdentityKey(record),
+          departmentDisplay: record.department_display,
+          subDepartmentDisplay: record.sub_department_display,
           status: record.status,
           createTime: record.create_time,
         });
@@ -145,6 +150,10 @@ export const buildOperationRows = (records) => {
         applicationDate: formatDate(record.application_date),
         budgetMonth: formatMonth(record.budget_month || record.declaration_month),
         deptName: record.dept_name,
+        deptId: record.dept_id,
+        departmentIdentityKey: departmentIdentityKey(record),
+        departmentDisplay: record.department_display,
+        subDepartmentDisplay: record.sub_department_display,
         status: record.status,
         createTime: record.create_time,
       });
@@ -189,6 +198,10 @@ export const buildProductionRows = (records) => {
           applicationDate: formatDate(record.application_date),
           budgetMonth: formatMonth(record.budget_month || record.declaration_month),
           deptName: record.dept_name,
+          deptId: record.dept_id,
+          departmentIdentityKey: departmentIdentityKey(record),
+          departmentDisplay: record.department_display,
+          subDepartmentDisplay: record.sub_department_display,
         });
       }
     }
@@ -215,6 +228,10 @@ export const buildProductionRows = (records) => {
         applicationDate: formatDate(record.application_date),
         budgetMonth: formatMonth(record.budget_month || record.declaration_month),
         deptName: record.dept_name,
+        deptId: record.dept_id,
+        departmentIdentityKey: departmentIdentityKey(record),
+        departmentDisplay: record.department_display,
+        subDepartmentDisplay: record.sub_department_display,
       });
     }
   }
@@ -520,11 +537,13 @@ const executionMonthForBudgetRow = (row, reportMonth) => (
 );
 
 const addGroupedAmount = (map, row, amount, source, reportMonth) => {
-  const deptName = String(row.deptName || '').trim() || 'Unknown';
+  const deptName = departmentDisplayName(row);
+  const departmentKey = departmentIdentityKey(row);
   const budgetMonth = String(executionMonthForBudgetRow(row, reportMonth)).trim() || 'Unspecified';
-  const key = `${deptName}__${budgetMonth}`;
+  const key = `${departmentKey}__${budgetMonth}`;
   const current = map.get(key) || {
     deptName,
+    departmentIdentityKey: departmentKey,
     budgetMonth,
     productionBudget: 0,
     nonProductionBudget: 0,
@@ -574,6 +593,8 @@ const extractExpenseDeptSplits = (item) => {
       if (dept && amt > 0) {
         entries.push({
           department: dept,
+          departmentId: entry.department_id || entry.departmentId || '',
+          departmentIdentityKey: departmentIdentityKey(entry),
           amount: amt,
           splitType: entry.split_type || entry.splitType || '',
           note: entry.note || '',
@@ -597,7 +618,14 @@ const extractExpenseDeptSplits = (item) => {
       const dept = String(entry.department || '').trim();
       const amt = toAmount(entry.amount);
       if (dept && amt > 0) {
-        entries.push({ department: dept, amount: amt, splitType, note: entry.note || '' });
+        entries.push({
+          department: dept,
+          departmentId: entry.department_id || entry.departmentId || '',
+          departmentIdentityKey: departmentIdentityKey(entry),
+          amount: amt,
+          splitType,
+          note: entry.note || '',
+        });
       }
     }
   }
@@ -614,9 +642,12 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
 
       if (splits.length === 0) {
         // 无拆分：保持原有的单行
+        const department = firstValue(item, ['department_resolved', 'applicant_department', 'creator_department', 'query_department'], '');
         return [{
           expenseKind: expenseKindLabel(item.expense_kind),
-          department: firstValue(item, ['department_resolved', 'applicant_department', 'creator_department', 'query_department'], ''),
+          department,
+          departmentId: firstValue(item, ['applicant_department_id', 'department_id', 'creator_department_id'], ''),
+          departmentIdentityKey: departmentIdentityKey({ ...item, deptName: department, businessId: item.business_id }),
           month,
           businessId: item.business_id,
           title: item.title,
@@ -635,6 +666,11 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
       return splits.map((entry) => ({
         expenseKind: expenseKindLabel(item.expense_kind),
         department: entry.department,
+        departmentId: entry.departmentId,
+        departmentIdentityKey: entry.departmentIdentityKey || departmentIdentityKey({
+          ...entry,
+          businessId: item.business_id,
+        }),
         month,
         businessId: item.business_id,
         title: item.title,
@@ -662,11 +698,13 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
   }
 
   for (const item of approvedExpenses || []) {
-    const deptName = String(item.department || '').trim() || 'Unknown';
+    const deptName = departmentDisplayName(item);
+    const departmentKey = departmentIdentityKey(item);
     const budgetMonth = String(item.month || '').trim() || 'Unspecified';
-    const key = `${deptName}__${budgetMonth}`;
+    const key = `${departmentKey}__${budgetMonth}`;
     const current = grouped.get(key) || {
       deptName,
+      departmentIdentityKey: departmentKey,
       budgetMonth,
       productionBudget: 0,
       nonProductionBudget: 0,
@@ -784,7 +822,8 @@ const groupShareRows = (rows, groupKeys, amountKey) => {
 const buildBudgetShareRows = ({ productionRows, operationRows, reportMonth }) => {
   const rows = [
     ...operationRows.map((row) => ({
-      department: row.deptName || 'Unknown',
+      department: departmentDisplayName(row),
+      departmentIdentityKey: departmentIdentityKey(row),
       month: executionMonthForBudgetRow(row, reportMonth),
       category: row.project || row.budgetType || '未分类',
       detail: row.detailItem || row.project || row.budgetType || '未分类',
@@ -792,7 +831,8 @@ const buildBudgetShareRows = ({ productionRows, operationRows, reportMonth }) =>
       formNo: row.formNo,
     })),
     ...productionRows.map((row) => ({
-      department: row.deptName || 'Unknown',
+      department: departmentDisplayName(row),
+      departmentIdentityKey: departmentIdentityKey(row),
       month: executionMonthForBudgetRow(row, reportMonth),
       category: row.category || '生产预算',
       detail: row.detailCategory || row.code || row.category || '未分类',
@@ -801,12 +841,13 @@ const buildBudgetShareRows = ({ productionRows, operationRows, reportMonth }) =>
     })),
   ];
 
-  return groupShareRows(rows, ['department', 'month'], 'amount');
+  return groupShareRows(rows, ['departmentIdentityKey', 'month'], 'amount');
 };
 
 const buildExpenseShareRows = (approvedDetailRows) => {
   const rows = approvedDetailRows.map((row) => ({
     department: row.department || 'Unknown',
+    departmentIdentityKey: departmentIdentityKey(row),
     month: row.month || 'Unspecified',
     category: row.expenseKind || '未分类',
     detail: row.title || row.expenseKind || '未分类',
@@ -814,7 +855,7 @@ const buildExpenseShareRows = (approvedDetailRows) => {
     formNo: row.businessId,
   }));
 
-  return groupShareRows(rows, ['department', 'month'], 'amount');
+  return groupShareRows(rows, ['departmentIdentityKey', 'month'], 'amount');
 };
 
 export const createBudgetReportWorkbook = ({ production = [], nonProduction = [], approvedExpenses = [], approvedExpenseDetails = [], reportStartDate = '', reportEndDate = '' }) => {
@@ -988,21 +1029,23 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   // 1. 部门预算分布（Top 12）
   const deptBudgetMap = new Map();
   for (const row of productionRows) {
-    const dept = (row.deptName || '未知').trim();
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
     const amt = toAmount(row.requestAmount);
-    const cur = deptBudgetMap.get(dept) || { deptName: dept, production: 0, nonProduction: 0 };
+    const cur = deptBudgetMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
     cur.production += amt;
-    deptBudgetMap.set(dept, cur);
+    deptBudgetMap.set(key, cur);
   }
   for (const row of operationRows) {
-    const dept = (row.deptName || '未知').trim();
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
     const amt = toAmount(row.amount);
-    const cur = deptBudgetMap.get(dept) || { deptName: dept, production: 0, nonProduction: 0 };
+    const cur = deptBudgetMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
     cur.nonProduction += amt;
-    deptBudgetMap.set(dept, cur);
+    deptBudgetMap.set(key, cur);
   }
   const deptBudgetRows = [...deptBudgetMap.values()]
-    .sort((a, b) => (b.production + b.nonProduction) - (a.production + b.nonProduction))
+    .sort((a, b) => (b.production + b.nonProduction) - (a.production + a.nonProduction))
     .slice(0, 12);
 
   // 2. 2026年月度预算趋势
@@ -1140,26 +1183,29 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   // 7. 预算执行状态分布（按部门 Top 10）
   const execStatusMap = new Map();
   for (const row of executionRows) {
-    const dept = (row.deptName || '未知').trim();
-    const cur = execStatusMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
+    const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
     cur.totalBudget += toAmount(row.totalBudget);
     cur.executed += toAmount(row.totalApproved);
-    execStatusMap.set(dept, cur);
+    execStatusMap.set(key, cur);
   }
   for (const r of production) {
     if (r.status === '审批中') {
-      const dept = (r.dept_name || '未知').trim();
-      const cur = execStatusMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+      const dept = departmentDisplayName(r);
+      const key = departmentIdentityKey(r);
+      const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
       cur.inProgress += toAmount(r.total_amount || r.monthly_budget_amount);
-      execStatusMap.set(dept, cur);
+      execStatusMap.set(key, cur);
     }
   }
   for (const r of nonProduction) {
     if (r.status === '审批中') {
-      const dept = (r.dept_name || '未知').trim();
-      const cur = execStatusMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+      const dept = departmentDisplayName(r);
+      const key = departmentIdentityKey(r);
+      const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
       cur.inProgress += toAmount(r.total_amount || r.budget_amount);
-      execStatusMap.set(dept, cur);
+      execStatusMap.set(key, cur);
     }
   }
   const execStatusRows = [...execStatusMap.values()]

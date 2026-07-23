@@ -24,6 +24,10 @@ CREATE TABLE "public"."production_budget" (
   "form_no" varchar(50) NOT NULL,
   "process_instance_id" varchar(100),
   "dept_name" varchar(255) NOT NULL,
+  "dept_id" varchar(64),
+  "dept_source" varchar(32),
+  "dept_path_ids" jsonb,
+  "dept_path_names" jsonb,
   "budget_type" varchar(20) NOT NULL,
   "declaration_month" varchar(7),
   "budget_month" varchar(7),
@@ -60,6 +64,10 @@ CREATE TABLE "public"."non_production_budget" (
   "form_no" varchar(50) NOT NULL,
   "process_instance_id" varchar(100),
   "dept_name" varchar(255) NOT NULL,
+  "dept_id" varchar(64),
+  "dept_source" varchar(32),
+  "dept_path_ids" jsonb,
+  "dept_path_names" jsonb,
   "budget_type" varchar(20) NOT NULL,
   "declaration_month" varchar(7),
   "budget_month" varchar(7),
@@ -233,8 +241,10 @@ ALTER SEQUENCE "public"."budget_operation_id_seq" OWNED BY "public"."budget_oper
 
 CREATE INDEX "idx_production_budget_month" ON "public"."production_budget" ("budget_month");
 CREATE INDEX "idx_production_form_no" ON "public"."production_budget" ("form_no");
+CREATE INDEX "idx_production_budget_dept_month" ON "public"."production_budget" ("dept_id", "budget_month");
 CREATE INDEX "idx_non_production_budget_month" ON "public"."non_production_budget" ("budget_month");
 CREATE INDEX "idx_non_production_form_no" ON "public"."non_production_budget" ("form_no");
+CREATE INDEX "idx_non_production_budget_dept_month" ON "public"."non_production_budget" ("dept_id", "budget_month");
 CREATE INDEX "idx_budget_material_form_no" ON "public"."budget_material" ("form_no");
 CREATE INDEX "idx_budget_production_form_no" ON "public"."budget_production" ("form_no");
 CREATE INDEX "idx_budget_labor_form_no" ON "public"."budget_labor" ("form_no");

@@ -73,6 +73,46 @@ function getFormValue(formValues, keywords) {
   }
 }
 
+function getDepartmentField(formValues) {
+  return formValues.find((field) => {
+    if (field.componentType !== 'DepartmentField') return false;
+    const name = textOf(field.name);
+    const id = textOf(field.id);
+    return ['部门', 'Departamento'].some((keyword) =>
+      name === keyword || id === keyword || includesAny(name, [keyword])
+    );
+  });
+}
+
+function getDepartmentId(extValue) {
+  const values = Array.isArray(extValue) ? extValue : [extValue];
+
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    for (const key of ['id', 'itemId', 'deptId']) {
+      const departmentId = textOf(value[key]).trim();
+      if (departmentId) return departmentId;
+    }
+  }
+
+  return null;
+}
+
+export function getDepartmentIdentity(dingtalkData) {
+  const formValues = dingtalkData.formComponentValues || [];
+  const departmentId = getDepartmentId(parseExtValue(getDepartmentField(formValues)));
+  if (departmentId) {
+    return { dept_id: departmentId, dept_source: 'form_id' };
+  }
+
+  const originatorDeptId = textOf(dingtalkData.originatorDeptId).trim();
+  if (originatorDeptId) {
+    return { dept_id: originatorDeptId, dept_source: 'originator_id' };
+  }
+
+  return { dept_id: null, dept_source: 'name_only' };
+}
+
 function getStatus(dingtalkData) {
   const statusStr = String(dingtalkData.status || '').toUpperCase();
   const resultStr = String(dingtalkData.result || '').toLowerCase();
@@ -261,6 +301,7 @@ export function getBudgetType(dingtalkData) {
 
 function parseBaseBudget(dingtalkData, budgetType) {
   const formValues = dingtalkData.formComponentValues || [];
+  const departmentIdentity = getDepartmentIdentity(dingtalkData);
   const budgetMonth = getFormValue(formValues, ['预算月份', 'Mes presupuestario', '填报月份', 'Mes de declaración']);
   const applicationDate = getFormValue(formValues, ['申请日期', 'Fecha de solicitud', '填报日期', 'Fecha de llenado']);
   // 诊断：打印所有表单字段名，便于排查金额提取问题
@@ -277,6 +318,9 @@ function parseBaseBudget(dingtalkData, budgetType) {
     form_no: dingtalkData.businessId,
     process_instance_id: dingtalkData.processInstanceId,
     dept_name: getFormValue(formValues, ['部门', 'Departamento']) || dingtalkData.originatorDeptName,
+    ...departmentIdentity,
+    dept_path_ids: null,
+    dept_path_names: null,
     budget_type: budgetType,
     declaration_month: toMonthValue(budgetMonth || applicationDate),
     budget_month: toMonthValue(budgetMonth || applicationDate),

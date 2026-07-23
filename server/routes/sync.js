@@ -13,6 +13,7 @@ import {
   getBudgetType,
   isBudgetRequest,
 } from '../services/parser.js';
+import { getDepartmentSnapshot } from '../services/department-tree.js';
 import { query, pool } from '../db/index.js';
 import { assertValidTable } from '../utils/db.js';
 
@@ -48,6 +49,100 @@ const isProduction = process.env.NODE_ENV === 'production';
 const DEFAULT_STATUS_REFRESH_LIMIT = Number(process.env.MANUAL_STATUS_REFRESH_LIMIT || 500);
 const EXPENSE_SYNC_URL = process.env.EXPENSE_SYNC_URL || process.env.DINGTALK_EXPENSE_SYNC_URL || '';
 const EXPENSE_SYNC_TIMEOUT_MS = Number(process.env.EXPENSE_SYNC_TIMEOUT_MS || 180000);
+
+export function applyBudgetDepartmentSnapshot(budget, snapshot) {
+  return snapshot ? { ...budget, ...snapshot } : budget;
+}
+
+export function buildBudgetDepartmentValues(budget) {
+  return [
+    budget.dept_id,
+    budget.dept_source,
+    budget.dept_path_ids ? JSON.stringify(budget.dept_path_ids) : null,
+    budget.dept_path_names ? JSON.stringify(budget.dept_path_names) : null,
+  ];
+}
+
+export function buildBudgetInsertValues(budget, budgetType) {
+  const values = [
+    budget.form_no,
+    budget.process_instance_id,
+    budget.dept_name,
+    ...buildBudgetDepartmentValues(budget),
+    budget.budget_type,
+    budget.declaration_month,
+    budget.budget_month,
+    budget.application_date,
+    budget.execution_region,
+  ];
+
+  if (budgetType === 'production') {
+    return [
+      ...values,
+      budget.monthly_budget_amount,
+      budget.total_amount,
+      budget.creator_name,
+      budget.creator_userid,
+      budget.create_time,
+      budget.status,
+      budget.remark,
+      budget.tenant_id,
+    ];
+  }
+
+  return [
+    ...values,
+    budget.creator_name,
+    budget.creator_userid,
+    budget.create_time,
+    budget.status,
+    budget.budget_amount,
+    budget.total_amount,
+    budget.remark,
+    budget.tenant_id,
+  ];
+}
+
+export function buildBudgetUpdateValues(processInstanceId, budget, formNo, budgetType = 'production') {
+  const values = [
+    processInstanceId,
+    budget.dept_name,
+    ...buildBudgetDepartmentValues(budget),
+    budget.budget_type,
+    budget.declaration_month,
+    budget.budget_month,
+    budget.application_date,
+    budget.execution_region,
+  ];
+
+  if (budgetType === 'production') {
+    return [
+      ...values,
+      budget.monthly_budget_amount,
+      budget.total_amount,
+      budget.status,
+      budget.remark,
+      formNo,
+    ];
+  }
+
+  return [
+    ...values,
+    budget.status,
+    budget.budget_amount,
+    budget.total_amount,
+    budget.remark,
+    formNo,
+  ];
+}
+
+async function enrichBudgetDepartmentSnapshot(budget) {
+  if (!budget.dept_id) return budget;
+  return applyBudgetDepartmentSnapshot(
+    budget,
+    await getDepartmentSnapshot(budget.dept_id)
+  );
+}
 
 function getApprovalState(detail) {
   const statusStr = String(detail.status || '').toUpperCase();
@@ -580,17 +675,15 @@ async function insertRecord(processInstanceId, detail, budgetType) {
     }
 
     if (budgetType === 'production') {
-      const budget = parseProductionBudget(detail);
+      const budget = await enrichBudgetDepartmentSnapshot(parseProductionBudget(detail));
       await client.query(
         `INSERT INTO production_budget
-        (form_no, process_instance_id, dept_name, budget_type, declaration_month,
+        (form_no, process_instance_id, dept_name, dept_id, dept_source, dept_path_ids, dept_path_names,
+         budget_type, declaration_month,
          budget_month, application_date, execution_region, monthly_budget_amount, total_amount,
          creator_name, creator_userid, create_time, status, remark, tenant_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-        [budget.form_no, budget.process_instance_id, budget.dept_name, budget.budget_type,
-         budget.declaration_month, budget.budget_month, budget.application_date, budget.execution_region,
-         budget.monthly_budget_amount, budget.total_amount, budget.creator_name, budget.creator_userid,
-         budget.create_time, budget.status, budget.remark, budget.tenant_id]
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        buildBudgetInsertValues(budget, 'production')
       );
 
       for (const item of parseMaterialItems(detail)) {
@@ -603,17 +696,15 @@ async function insertRecord(processInstanceId, detail, budgetType) {
         await insertProductionDetail(client, 'budget_labor', item);
       }
     } else {
-      const budget = parseNonProductionBudget(detail);
+      const budget = await enrichBudgetDepartmentSnapshot(parseNonProductionBudget(detail));
       await client.query(
         `INSERT INTO non_production_budget
-        (form_no, process_instance_id, dept_name, budget_type, declaration_month,
+        (form_no, process_instance_id, dept_name, dept_id, dept_source, dept_path_ids, dept_path_names,
+         budget_type, declaration_month,
          budget_month, application_date, execution_region, creator_name, creator_userid,
          create_time, status, budget_amount, total_amount, remark, tenant_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-        [budget.form_no, budget.process_instance_id, budget.dept_name, budget.budget_type,
-         budget.declaration_month, budget.budget_month, budget.application_date, budget.execution_region,
-         budget.creator_name, budget.creator_userid, budget.create_time, budget.status,
-         budget.budget_amount, budget.total_amount, budget.remark, budget.tenant_id]
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        buildBudgetInsertValues(budget, 'non_production')
       );
 
       for (const item of parseHrItems(detail)) {
@@ -644,16 +735,15 @@ async function updateRecord(processInstanceId, detail, budgetType) {
     await client.query('BEGIN');
 
     if (budgetType === 'production') {
-      const budget = parseProductionBudget(detail);
+      const budget = await enrichBudgetDepartmentSnapshot(parseProductionBudget(detail));
       await client.query(
         `UPDATE production_budget SET
-         process_instance_id = $1, dept_name = $2, budget_type = $3, declaration_month = $4,
-         budget_month = $5, application_date = $6, execution_region = $7,
-         monthly_budget_amount = $8, total_amount = $9, status = $10, remark = $11
-         WHERE form_no = $12`,
-        [processInstanceId, budget.dept_name, budget.budget_type, budget.declaration_month,
-         budget.budget_month, budget.application_date, budget.execution_region,
-         budget.monthly_budget_amount, budget.total_amount, budget.status, budget.remark, formNo]
+         process_instance_id = $1, dept_name = $2, dept_id = $3, dept_source = $4,
+         dept_path_ids = $5, dept_path_names = $6, budget_type = $7, declaration_month = $8,
+         budget_month = $9, application_date = $10, execution_region = $11,
+         monthly_budget_amount = $12, total_amount = $13, status = $14, remark = $15
+         WHERE form_no = $16`,
+        buildBudgetUpdateValues(processInstanceId, budget, formNo, 'production')
       );
 
       await client.query('DELETE FROM budget_material WHERE form_no = $1', [formNo]);
@@ -671,16 +761,15 @@ async function updateRecord(processInstanceId, detail, budgetType) {
         await insertProductionDetail(client, 'budget_labor', item);
       }
     } else {
-      const budget = parseNonProductionBudget(detail);
+      const budget = await enrichBudgetDepartmentSnapshot(parseNonProductionBudget(detail));
       await client.query(
         `UPDATE non_production_budget SET
-         process_instance_id = $1, dept_name = $2, budget_type = $3, declaration_month = $4,
-         budget_month = $5, application_date = $6, execution_region = $7,
-         status = $8, budget_amount = $9, total_amount = $10, remark = $11
-         WHERE form_no = $12`,
-        [processInstanceId, budget.dept_name, budget.budget_type, budget.declaration_month,
-         budget.budget_month, budget.application_date, budget.execution_region,
-         budget.status, budget.budget_amount, budget.total_amount, budget.remark, formNo]
+         process_instance_id = $1, dept_name = $2, dept_id = $3, dept_source = $4,
+         dept_path_ids = $5, dept_path_names = $6, budget_type = $7, declaration_month = $8,
+         budget_month = $9, application_date = $10, execution_region = $11,
+         status = $12, budget_amount = $13, total_amount = $14, remark = $15
+         WHERE form_no = $16`,
+        buildBudgetUpdateValues(processInstanceId, budget, formNo, 'non_production')
       );
 
       await client.query('DELETE FROM budget_hr WHERE form_no = $1', [formNo]);

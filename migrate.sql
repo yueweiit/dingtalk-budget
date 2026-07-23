@@ -27,7 +27,11 @@ ALTER TABLE "public"."production_budget"
   ADD COLUMN IF NOT EXISTS "total_amount" numeric(14,2) DEFAULT 0,
   ADD COLUMN IF NOT EXISTS "creator_name" varchar(100),
   ADD COLUMN IF NOT EXISTS "creator_userid" varchar(100),
-  ADD COLUMN IF NOT EXISTS "remark" text;
+  ADD COLUMN IF NOT EXISTS "remark" text,
+  ADD COLUMN IF NOT EXISTS "dept_id" varchar(64),
+  ADD COLUMN IF NOT EXISTS "dept_source" varchar(32),
+  ADD COLUMN IF NOT EXISTS "dept_path_ids" jsonb,
+  ADD COLUMN IF NOT EXISTS "dept_path_names" jsonb;
 
 ALTER TABLE "public"."non_production_budget"
   ADD COLUMN IF NOT EXISTS "declaration_month" varchar(7),
@@ -38,7 +42,11 @@ ALTER TABLE "public"."non_production_budget"
   ADD COLUMN IF NOT EXISTS "total_amount" numeric(14,2) DEFAULT 0,
   ADD COLUMN IF NOT EXISTS "creator_name" varchar(100),
   ADD COLUMN IF NOT EXISTS "creator_userid" varchar(100),
-  ADD COLUMN IF NOT EXISTS "remark" text;
+  ADD COLUMN IF NOT EXISTS "remark" text,
+  ADD COLUMN IF NOT EXISTS "dept_id" varchar(64),
+  ADD COLUMN IF NOT EXISTS "dept_source" varchar(32),
+  ADD COLUMN IF NOT EXISTS "dept_path_ids" jsonb,
+  ADD COLUMN IF NOT EXISTS "dept_path_names" jsonb;
 
 -- ============================================================
 -- 2. 主表：删除废弃列
@@ -286,8 +294,10 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS "idx_production_budget_month" ON "public"."production_budget" ("budget_month");
 CREATE INDEX IF NOT EXISTS "idx_production_form_no" ON "public"."production_budget" ("form_no");
+CREATE INDEX IF NOT EXISTS "idx_production_budget_dept_month" ON "public"."production_budget" ("dept_id", "budget_month");
 CREATE INDEX IF NOT EXISTS "idx_non_production_budget_month" ON "public"."non_production_budget" ("budget_month");
 CREATE INDEX IF NOT EXISTS "idx_non_production_form_no" ON "public"."non_production_budget" ("form_no");
+CREATE INDEX IF NOT EXISTS "idx_non_production_budget_dept_month" ON "public"."non_production_budget" ("dept_id", "budget_month");
 CREATE INDEX IF NOT EXISTS "idx_budget_material_form_no" ON "public"."budget_material" ("form_no");
 CREATE INDEX IF NOT EXISTS "idx_budget_production_form_no" ON "public"."budget_production" ("form_no");
 CREATE INDEX IF NOT EXISTS "idx_budget_labor_form_no" ON "public"."budget_labor" ("form_no");

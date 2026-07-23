@@ -9,6 +9,7 @@ import * as echarts from 'echarts';
 import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
 import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections';
+import { departmentMatches } from '../utils/departmentIdentity.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 
 const styles = {
@@ -395,25 +396,6 @@ function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '') || '';
 }
 
-function compactDeptKey(value) {
-  const key = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s()（）\-_/\\,.;:，。；：&]+/g, '');
-  if (
-    key.includes('悦为智能') ||
-    key.includes('ywtechai') ||
-    (key.includes('it') && key.includes('sc') && key.includes('信息技术')) ||
-    (key.includes('it') && key.includes('sc') && key.includes('tecnolog') && key.includes('control'))
-  ) {
-    return 'dept_yw_tech_ai';
-  }
-  if (key.includes('pdpm') || key.includes('产品和生产管理')) {
-    return 'dept_pdpm_product_management';
-  }
-  return key;
-}
-
 function detailMonthOf(item) {
   if (item?.query_month) return String(item.query_month).trim();
   const date = firstNonEmpty(item?.source_created_at, item?.request_date, item?.approval_completed_at);
@@ -428,6 +410,17 @@ function detailDepartmentOf(item) {
     item?.creator_department,
     item?.query_department
   );
+}
+
+function detailDepartmentRecord(item) {
+  return {
+    department: detailDepartmentOf(item),
+    departmentId: firstNonEmpty(
+      item?.applicant_department_id,
+      item?.department_id,
+      item?.creator_department_id,
+    ),
+  };
 }
 
 function detailAmountOf(item) {
@@ -469,6 +462,7 @@ function extractDetailSplits(item) {
     return dbSplits
       .map((entry) => ({
         department: firstNonEmpty(entry.department, entry.dept_name),
+        departmentId: firstNonEmpty(entry.department_id, entry.departmentId, entry.dept_id),
         amount: toNum(entry.amount),
         splitType: entry.split_type || entry.splitType || '',
         note: entry.note || '',
@@ -491,7 +485,13 @@ function extractDetailSplits(item) {
       const department = firstNonEmpty(entry.department, entry.dept_name);
       const amount = toNum(entry.amount);
       if (department && amount > 0) {
-        rows.push({ department, amount, splitType, note: entry.note || '' });
+        rows.push({
+          department,
+          departmentId: firstNonEmpty(entry.department_id, entry.departmentId, entry.dept_id),
+          amount,
+          splitType,
+          note: entry.note || '',
+        });
       }
     }
   }
@@ -532,8 +532,8 @@ function splitExpenseDetailRow(item, split) {
   };
 }
 
-function buildExpenseDetailSections(rawDetails, deptName, budgetMonth) {
-  const targetDeptKey = compactDeptKey(deptName);
+function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
+  const targetDepartment = { ...detail, deptName: detail?.dept_name };
   const sections = {
     operationPurchase: [],
     salary: [],
@@ -541,7 +541,7 @@ function buildExpenseDetailSections(rawDetails, deptName, budgetMonth) {
     tax: [],
   };
 
-  if (!targetDeptKey || !budgetMonth) return sections;
+  if ((!targetDepartment.deptName && !targetDepartment.dept_id) || !budgetMonth) return sections;
 
   for (const item of rawDetails || []) {
     if (detailMonthOf(item) !== budgetMonth) continue;
@@ -549,26 +549,26 @@ function buildExpenseDetailSections(rawDetails, deptName, budgetMonth) {
     const amount = detailAmountOf(item);
     if (amount <= 0) continue;
 
-    const directDeptKey = compactDeptKey(detailDepartmentOf(item));
+    const directDepartment = detailDepartmentRecord(item);
     const splits = extractDetailSplits(item);
 
     if (splits.length > 0) {
       const splitTotal = splits.reduce((sum, split) => sum + toNum(split.amount), 0);
 
       for (const split of splits) {
-        if (compactDeptKey(split.department) !== targetDeptKey) continue;
+        if (!departmentMatches(targetDepartment, split)) continue;
         const sectionKey = sectionKeyForSplit(split.splitType);
         sections[sectionKey].push(splitExpenseDetailRow(item, split));
       }
 
       const remainder = Number((amount - splitTotal).toFixed(2));
-      if (remainder > 0.01 && directDeptKey === targetDeptKey) {
+      if (remainder > 0.01 && departmentMatches(targetDepartment, directDepartment)) {
         sections.operationPurchase.push(directExpenseDetailRow(item, remainder, '未拆分余额'));
       }
       continue;
     }
 
-    if (directDeptKey !== targetDeptKey) continue;
+    if (!departmentMatches(targetDepartment, directDepartment)) continue;
     sections.operationPurchase.push(directExpenseDetailRow(item, amount));
   }
 
@@ -625,7 +625,7 @@ function computeBudgetBreakdown(detail) {
 
 function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
   if (Array.isArray(rawDetails) && rawDetails.length > 0) {
-    const sectionBreakdown = expenseBreakdownFromSections(buildExpenseDetailSections(rawDetails, deptName, budgetMonth));
+    const sectionBreakdown = expenseBreakdownFromSections(buildExpenseDetailSections(rawDetails, detail, budgetMonth));
     if (sectionBreakdown.rowCount > 0) return sectionBreakdown;
   }
 
@@ -649,7 +649,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     };
   }
 
-  const key = compactDeptKey(deptName);
+  const targetDepartment = { ...detail, deptName };
   let operationExp = 0, purchaseExp = 0, salaryExp = 0, officeExp = 0, taxExp = 0;
 
   for (const item of rawDetails || []) {
@@ -659,7 +659,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     const dbSplits = item.expense_splits || item.expenseSplits;
     if (Array.isArray(dbSplits) && dbSplits.length > 0) {
       for (const entry of dbSplits) {
-        if (compactDeptKey(entry.department) !== key) continue;
+        if (!departmentMatches(targetDepartment, entry)) continue;
         const amt = toNum(entry.amount);
         const splitType = String(entry.split_type || entry.splitType || '').toLowerCase();
         if (splitType === 'salary' || splitType === 'social_insurance') salaryExp += amt;
@@ -680,7 +680,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
       const entries = item[s.col];
       if (!Array.isArray(entries)) continue;
       for (const e of entries) {
-        if (compactDeptKey(e.department) === key) {
+        if (departmentMatches(targetDepartment, e)) {
           const amt = toNum(e.amount);
           if (s.target === 'salary') salaryExp += amt;
           else if (s.target === 'office') officeExp += amt;
@@ -690,8 +690,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     }
 
     // 非拆分的按部门直接归入 operation/purchase
-    const itemDept = compactDeptKey(item.department_resolved || item.applicant_department || '');
-    if (itemDept !== key) continue;
+    if (!departmentMatches(targetDepartment, detailDepartmentRecord(item))) continue;
     const amt = toNum(item.base_currency_amount);
     if (item.expense_kind === 'purchase') {
       purchaseExp += amt;
@@ -974,6 +973,7 @@ export default function BudgetList({ onGoToVisual }) {
                     <tr>
                       <th style={styles.th}>表单编号</th>
                       <th style={styles.th}>部门</th>
+                      <th style={styles.th}>子部门</th>
                       <th style={styles.th}>预算类型</th>
                       <th style={styles.th}>申请日期</th>
                       <th style={styles.th}>预算月份</th>
@@ -989,7 +989,8 @@ export default function BudgetList({ onGoToVisual }) {
                     {data.map((item) => (
                       <tr key={item.id || item.form_no}>
                         <td style={styles.td}>{displayValue(item.form_no)}</td>
-                        <td style={styles.td}>{displayValue(item.dept_name)}</td>
+                        <td style={styles.td}>{displayValue(item.department_display || item.dept_name)}</td>
+                        <td style={styles.td}>{displayValue(item.sub_department_display)}</td>
                         <td style={styles.td}>{displayValue(item.budget_type)}</td>
                         <td style={styles.td}>{displayValue(item.application_date)}</td>
                         <td style={styles.td}>{displayValue(item.budget_month || item.declaration_month)}</td>
@@ -1074,6 +1075,8 @@ export default function BudgetList({ onGoToVisual }) {
                   {[
                     ['表单编号', detailItem.form_no],
                     ['部门', detailItem.dept_name],
+                    ['子部门', detailItem.sub_department_display],
+                    ['部门 ID', detailItem.dept_id],
                     ['预算类型', detailItem.budget_type],
                     ['状态', detailItem.status],
                     ['申请日期', detailItem.application_date],
@@ -1094,7 +1097,7 @@ export default function BudgetList({ onGoToVisual }) {
                 {detailExpenseRaw !== null && (() => {
                   const budget = computeBudgetBreakdown(detailItem);
                   const bm = detailItem.budget_month || detailItem.declaration_month || '';
-                  const expenseSections = buildExpenseDetailSections(detailExpenseRaw, detailItem.dept_name, bm);
+                  const expenseSections = buildExpenseDetailSections(detailExpenseRaw, detailItem, bm);
                   const sectionExpense = expenseBreakdownFromSections(expenseSections);
                   const exp = sectionExpense.rowCount > 0
                     ? sectionExpense
