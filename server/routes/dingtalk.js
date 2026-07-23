@@ -1,5 +1,6 @@
 import express from 'express';
 import { query } from '../db/index.js';
+import { buildConnectorDepartmentFilter } from '../services/connector-department-query.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
@@ -89,7 +90,7 @@ function resolveTableName(type) {
 // GET /api/dingtalk/querySimple - 钉钉专用简化接口
 router.get('/querySimple', async (req, res) => {
   try {
-    const { deptName, startDate, endDate, type, formNo } = req.query;
+    const { startDate, endDate, type, formNo } = req.query;
     const timeLike =
       startDate
       || endDate
@@ -115,11 +116,12 @@ router.get('/querySimple', async (req, res) => {
       whereClause = `WHERE form_no = $${paramIndex}`;
       params.push(formNo);
     } else {
-      // 否则按部门模糊查询，并按输入日期所在月份过滤
-      if (deptName) {
-        whereClause += ` AND dept_name ILIKE $${paramIndex}`;
-        params.push(`%${String(deptName).trim()}%`);
-        paramIndex++;
+      // 连接器传入部门 ID 时必须精确匹配；未升级的历史连接器才兼容名称匹配。
+      const departmentFilter = buildConnectorDepartmentFilter(req.query, paramIndex);
+      if (departmentFilter) {
+        whereClause += ` AND ${departmentFilter.condition}`;
+        params.push(...departmentFilter.params);
+        paramIndex = departmentFilter.nextParamIndex;
       }
 
       // 未传任何日期时，按「上海时区今天」所在自然月过滤，避免一直命中历史最新一条
@@ -174,12 +176,13 @@ router.get('/querySimple', async (req, res) => {
 // GET /api/dingtalk/query - 原接口（保留）
 router.get('/query', async (req, res) => {
   try {
-    const { deptName, startDate, endDate, type } = req.query;
+    const { startDate, endDate, type } = req.query;
+    const departmentFilter = buildConnectorDepartmentFilter(req.query, 1);
 
-    if (!deptName && !startDate && !endDate) {
+    if (!departmentFilter && !startDate && !endDate) {
       return res.status(400).json({
         success: false,
-        message: '至少需要一个查询参数: deptName, startDate, endDate',
+        message: '至少需要一个查询参数: deptName/departmentId, startDate, endDate',
       });
     }
 
@@ -189,10 +192,10 @@ router.get('/query', async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
-    if (deptName) {
-      whereClause += ` AND dept_name ILIKE $${paramIndex}`;
-      params.push(`%${String(deptName).trim()}%`);
-      paramIndex++;
+    if (departmentFilter) {
+      whereClause += ` AND ${departmentFilter.condition}`;
+      params.push(...departmentFilter.params);
+      paramIndex = departmentFilter.nextParamIndex;
     }
 
     if (startDate) {

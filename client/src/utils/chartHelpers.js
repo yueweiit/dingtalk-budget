@@ -1,47 +1,15 @@
 import { toAmount, formatMonth } from './xlsxReport.js';
-
-const normalizeDeptName = (value) => String(value || '').trim().replace(/\s+/g, ' ');
-
-const compactDeptKey = (value) => normalizeDeptName(value)
-  .toLowerCase()
-  .replace(/[\s()（）\-_/\\,.;:，。；：&]/g, '');
-
-const canonicalDeptName = (value) => {
-  const name = normalizeDeptName(value) || '未知';
-  const key = compactDeptKey(name);
-
-  if (
-    key.includes('悦为智能') ||
-    key.includes('ywtechai') ||
-    (key.includes('it') && key.includes('sc') && key.includes('信息技术')) ||
-    (key.includes('it') && key.includes('sc') && key.includes('tecnolog') && key.includes('control'))
-  ) {
-    return 'IT&SC 信息技术和体系管理Tecnologías de la información y control';
-  }
-
-  if (key.includes('财务中心') || key.includes('centrodefinanzas')) {
-    return 'FC CN财务中心 Centro de finanzas';
-  }
-
-  if (key.includes('hrmx') || key.includes('mx人力资源')) {
-    return 'HR MX人力资源Recursos humanos';
-  }
-
-  if (key.includes('hrcn') || (key.includes('hr') && key.includes('人力资源') && !key.includes('mx'))) {
-    return 'HR CN人力资源Recursos humanos';
-  }
-
-  return name;
-};
+import { departmentDisplayName, departmentIdentityKey } from './departmentIdentity.js';
 
 function aggregateExecutionRowsByDept(executionRows) {
   const deptMap = new Map();
 
   for (const row of executionRows) {
-    const deptName = canonicalDeptName(row.deptName);
-    const key = compactDeptKey(deptName);
+    const deptName = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
     const current = deptMap.get(key) || {
       deptName,
+      departmentIdentityKey: key,
       budgetTotal: 0,
       approvedTotal: 0,
       budgetSubmittedApprovedTotal: 0,
@@ -74,19 +42,21 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
   const deptMap = new Map();
 
   for (const row of productionRows) {
-    const dept = canonicalDeptName(row.deptName);
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
     const amount = toAmount(row.requestAmount);
-    const current = deptMap.get(dept) || { deptName: dept, production: 0, nonProduction: 0 };
+    const current = deptMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
     current.production += amount;
-    deptMap.set(dept, current);
+    deptMap.set(key, current);
   }
 
   for (const row of operationRows) {
-    const dept = canonicalDeptName(row.deptName);
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
     const amount = toAmount(row.amount);
-    const current = deptMap.get(dept) || { deptName: dept, production: 0, nonProduction: 0 };
+    const current = deptMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
     current.nonProduction += amount;
-    deptMap.set(dept, current);
+    deptMap.set(key, current);
   }
 
   return [...deptMap.values()]
@@ -255,25 +225,39 @@ export function buildExecutionStatus(executionRows, productionRecords, nonProduc
 
   // 1. 从 executionRows 汇总已执行金额 + 预算总额
   for (const row of aggregateExecutionRowsByDept(executionRows)) {
-    const dept = canonicalDeptName(row.deptName);
-    const cur = deptMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
+    const cur = deptMap.get(key) || {
+      deptName: dept,
+      departmentIdentityKey: key,
+      totalBudget: 0,
+      executed: 0,
+      inProgress: 0,
+    };
     cur.totalBudget += toAmount(row.budgetTotal);
     cur.executed += toAmount(row.approvedTotal);
-    deptMap.set(dept, cur);
+    deptMap.set(key, cur);
   }
 
   // 2. 从原始预算记录汇总「审批中」金额
   const addPending = (records) => {
     for (const r of records) {
       if (r.status === '审批中') {
-        const dept = canonicalDeptName(r.dept_name);
-        const cur = deptMap.get(dept) || { deptName: dept, totalBudget: 0, executed: 0, inProgress: 0 };
+        const dept = departmentDisplayName(r);
+        const key = departmentIdentityKey(r);
+        const cur = deptMap.get(key) || {
+          deptName: dept,
+          departmentIdentityKey: key,
+          totalBudget: 0,
+          executed: 0,
+          inProgress: 0,
+        };
         cur.inProgress += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
         // 审批中的记录也可能已计入 totalBudget，不需要再加一次
-        if (!executionRows.some((er) => canonicalDeptName(er.deptName) === dept)) {
+        if (!executionRows.some((er) => departmentIdentityKey(er) === key)) {
           cur.totalBudget += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
         }
-        deptMap.set(dept, cur);
+        deptMap.set(key, cur);
       }
     }
   };

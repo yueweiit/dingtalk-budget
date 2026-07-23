@@ -2,6 +2,10 @@ import express from 'express';
 import pg from 'pg';
 import { query } from '../db/index.js';
 import { getProcessInstanceDetail } from '../services/dingtalk.js';
+import {
+  buildDepartmentPresentation,
+  departmentIdentityKey,
+} from '../services/department-identity.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
@@ -62,13 +66,17 @@ function budgetMonthExprFor(alias) {
 
 function deptPartitionExprFor(alias) {
   const normalized = `LOWER(REGEXP_REPLACE(COALESCE(${alias}.dept_name, ''), '[\\s()（）\\-_/\\\\,.;:，。；：&]+', '', 'g'))`;
-  return `CASE
+  const legacyName = `CASE
     WHEN ${normalized} LIKE '%悦为智能%'
       OR ${normalized} LIKE '%ywtechai%'
       OR (${normalized} LIKE '%it%sc%' AND ${normalized} LIKE '%信息技术%')
       OR (${normalized} LIKE '%it%sc%' AND ${normalized} LIKE '%tecnolog%' AND ${normalized} LIKE '%control%')
     THEN 'dept_yw_tech_ai'
     ELSE ${normalized}
+  END`;
+  return `CASE
+    WHEN NULLIF(${alias}.dept_id, '') IS NOT NULL THEN 'id:' || ${alias}.dept_id
+    ELSE 'legacy:' || ${alias}.form_no || ':' || (${legacyName})
   END`;
 }
 
@@ -228,6 +236,40 @@ function expenseDepartment(item) {
   ));
 }
 
+function expenseDepartmentRecord(item) {
+  return {
+    form_no: item?.form_no || item?.business_id,
+    business_id: item?.business_id,
+    dept_name: expenseDepartment(item),
+    dept_id: firstNonEmpty(
+      item?.applicant_department_id,
+      item?.department_id,
+      item?.creator_department_id
+    ),
+    dept_source: firstNonEmpty(
+      item?.applicant_department_source,
+      item?.department_source,
+      item?.creator_department_source
+    ),
+    dept_path_names: firstNonEmpty(
+      item?.applicant_department_path_names,
+      item?.department_path_names,
+      item?.creator_department_path_names
+    ),
+  };
+}
+
+function splitDepartmentRecord(entry, businessId) {
+  return {
+    form_no: businessId,
+    business_id: businessId,
+    dept_name: normalizeDept(entry?.department),
+    dept_id: entry?.department_id,
+    dept_source: entry?.department_source,
+    dept_path_names: entry?.department_path_names,
+  };
+}
+
 function expenseRegion(item) {
   const text = [
     item?.department_resolved,
@@ -322,7 +364,8 @@ async function fetchExpenseDeptSplits(details) {
   try {
     await client.connect();
     const promise = client.query(`
-      SELECT business_id, split_type, department, amount, note
+      SELECT business_id, split_type, department, department_id, department_source,
+             department_path_names, amount, note
       FROM approval_expense_dept_split
       WHERE business_id = ANY($1::varchar[])
     `, [businessIds]);
@@ -365,6 +408,9 @@ async function attachExpenseSplitsToDetails(details) {
       split_type: String(row.split_type || '').trim(),
       category: splitExpenseCategory(row.split_type),
       department: normalizeDept(row.department),
+      department_id: row.department_id || null,
+      department_source: row.department_source || 'name_only',
+      department_path_names: row.department_path_names || null,
       amount: numberValue(row.amount),
       note: row.note || '',
     });
@@ -759,13 +805,24 @@ function extractDeptSplitEntries(item) {
   return entries;
 }
 
-function addApprovedExpenseGroup(grouped, department, month, values = {}) {
-  const dept = normalizeDept(department);
+function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) {
+  const department = typeof departmentRecord === 'string'
+    ? { dept_name: departmentRecord }
+    : departmentRecord;
+  const dept = normalizeDept(department?.dept_name);
   if (!dept || !month) return;
 
-  const key = `${compactDept(dept)}__${month}`;
+  const identityKey = departmentIdentityKey(department);
+  const presentation = buildDepartmentPresentation(department);
+  const key = `${identityKey}__${month}`;
   const current = grouped.get(key) || {
     department: dept,
+    department_id: department?.dept_id || null,
+    department_source: department?.dept_source || 'name_only',
+    department_path_names: department?.dept_path_names || null,
+    department_identity_key: identityKey,
+    department_display: presentation.departmentDisplay,
+    sub_department_display: presentation.subDepartmentDisplay,
     month,
     operationTotal: 0,
     operationCount: 0,
@@ -794,6 +851,9 @@ function splitRowsOf(item) {
     return dbSplits
       .map((entry) => ({
         department: normalizeDept(entry.department),
+        department_id: entry.department_id || null,
+        department_source: entry.department_source || 'name_only',
+        department_path_names: entry.department_path_names || null,
         amount: numberValue(entry.amount),
         category: splitExpenseCategory(entry.split_type || entry.splitType),
       }))
@@ -802,6 +862,9 @@ function splitRowsOf(item) {
 
   return extractDeptSplitEntries(item).map((entry) => ({
     department: normalizeDept(entry.department),
+    department_id: entry.department_id || null,
+    department_source: entry.department_source || 'name_only',
+    department_path_names: entry.department_path_names || null,
     amount: numberValue(entry.amount),
     category: splitExpenseCategory(entry.splitType),
   }));
@@ -850,10 +913,11 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
     if (amount <= 0) continue;
 
     const directDepartment = expenseDepartment(item);
+    const directDepartmentRecord = expenseDepartmentRecord(item);
 
     if (item.expense_kind === 'purchase') {
       if (!shouldIncludeDepartmentExpense(directDepartment, month, item.execution_region, budgetedDepartmentMonths)) continue;
-      addApprovedExpenseGroup(grouped, directDepartment, month, {
+      addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
         purchaseTotal: amount,
         managementTotal: amount,
         purchaseCount: 1,
@@ -864,7 +928,7 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
     const splits = splitRowsOf(item);
     if (splits.length === 0) {
       if (!shouldIncludeDepartmentExpense(directDepartment, month, item.execution_region, budgetedDepartmentMonths)) continue;
-      addApprovedExpenseGroup(grouped, directDepartment, month, {
+      addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
         operationTotal: amount,
         managementTotal: amount,
         operationCount: 1,
@@ -884,19 +948,20 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
       else if (category === 'tax') values.taxTotal = entry.amount;
       else values.managementTotal = entry.amount;
 
-      addApprovedExpenseGroup(grouped, entry.department, month, values);
-      touchedDepartments.add(compactDept(entry.department));
+      const departmentRecord = splitDepartmentRecord(entry, item.business_id);
+      addApprovedExpenseGroup(grouped, departmentRecord, month, values);
+      touchedDepartments.add(departmentIdentityKey(departmentRecord));
     }
 
     const remainder = Number((amount - classifiedSplitTotal).toFixed(2));
     if (remainder > 0.01 && shouldIncludeDepartmentExpense(
       directDepartment, month, item.execution_region, budgetedDepartmentMonths
     )) {
-      addApprovedExpenseGroup(grouped, directDepartment, month, {
+      addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
         operationTotal: remainder,
         managementTotal: remainder,
       });
-      touchedDepartments.add(compactDept(directDepartment));
+      touchedDepartments.add(departmentIdentityKey(directDepartmentRecord));
     }
 
     for (const deptKey of touchedDepartments) {
@@ -960,6 +1025,9 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.request_date,
         o.execution_region,
         o.applicant_department,
+        o.applicant_department_id,
+        o.applicant_department_source,
+        o.applicant_department_path_names,
         o.creator_department,
         o.applicant_department AS query_department,
         o.source_created_at,
@@ -994,6 +1062,9 @@ async function fetchApprovalExpenseDetails(dateRange) {
         p.request_date,
         p.execution_region,
         p.applicant_department,
+        p.applicant_department_id,
+        p.applicant_department_source,
+        p.applicant_department_path_names,
         p.creator_department,
         p.applicant_department AS query_department,
         p.source_created_at,
@@ -1118,7 +1189,8 @@ function productionBudgetCte(whereClause) {
   return `
     WITH filtered AS (
       SELECT
-        p.id, p.form_no, p.process_instance_id, p.dept_name, p.budget_type,
+        p.id, p.form_no, p.process_instance_id, p.dept_name, p.dept_id, p.dept_source,
+        p.dept_path_ids, p.dept_path_names, p.budget_type,
         p.declaration_month, p.budget_month, p.application_date, p.execution_region,
         p.monthly_budget_amount, p.total_amount, p.creator_name, p.creator_userid,
         p.create_time, p.status, p.remark, p.tenant_id,
@@ -1176,7 +1248,8 @@ function nonProductionBudgetCte(whereClause) {
   return `
     WITH filtered AS (
       SELECT
-        n.id, n.form_no, n.process_instance_id, n.dept_name, n.budget_type,
+        n.id, n.form_no, n.process_instance_id, n.dept_name, n.dept_id, n.dept_source,
+        n.dept_path_ids, n.dept_path_names, n.budget_type,
         n.declaration_month, n.budget_month, n.application_date, n.execution_region,
         n.creator_name, n.creator_userid, n.create_time, n.status,
         n.budget_amount, n.total_amount, n.remark, n.tenant_id,
@@ -1228,6 +1301,18 @@ function nonProductionBudgetCte(whereClause) {
   `;
 }
 
+function withBudgetDepartmentPresentation(rows) {
+  return rows.map((row) => {
+    const presentation = buildDepartmentPresentation(row);
+    return {
+      ...row,
+      department_identity_key: presentation.identityKey,
+      department_display: presentation.departmentDisplay,
+      sub_department_display: presentation.subDepartmentDisplay,
+    };
+  });
+}
+
 async function fetchProductionBudgetRows(client, filters = {}, paging = null, options = {}) {
   const { whereClause, params, paramIndex } = buildBudgetWhere('p', filters, options);
   const cte = productionBudgetCte(whereClause);
@@ -1241,7 +1326,7 @@ async function fetchProductionBudgetRows(client, filters = {}, paging = null, op
     ORDER BY create_time DESC NULLS LAST, id DESC
     ${limitSql}
   `, queryParams);
-  return result.rows;
+  return withBudgetDepartmentPresentation(result.rows);
 }
 
 async function countProductionBudgetRows(client, filters = {}) {
@@ -1269,7 +1354,7 @@ async function fetchNonProductionBudgetRows(client, filters = {}, paging = null,
     ORDER BY create_time DESC NULLS LAST, id DESC
     ${limitSql}
   `, queryParams);
-  return result.rows;
+  return withBudgetDepartmentPresentation(result.rows);
 }
 
 async function countNonProductionBudgetRows(client, filters = {}) {
