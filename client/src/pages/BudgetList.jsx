@@ -10,6 +10,7 @@ import { getProductionList, getNonProductionList, getStats, getBudgetDetail, get
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
 import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections';
 import { departmentMatches } from '../utils/departmentIdentity.js';
+import { expenseDetailSplitRecord } from '../utils/expenseDetailSplit.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 
 const styles = {
@@ -420,6 +421,12 @@ function detailDepartmentRecord(item) {
       item?.department_id,
       item?.creator_department_id,
     ),
+    reportingDeptId: firstNonEmpty(item?.reporting_dept_id, item?.reportingDeptId),
+    reportingDeptName: firstNonEmpty(item?.reporting_dept_name, item?.reportingDeptName),
+    reportingDepartmentIdentityKey: firstNonEmpty(
+      item?.reporting_department_identity_key,
+      item?.reportingDepartmentIdentityKey,
+    ),
   };
 }
 
@@ -461,8 +468,7 @@ function extractDetailSplits(item) {
   if (Array.isArray(dbSplits)) {
     return dbSplits
       .map((entry) => ({
-        department: firstNonEmpty(entry.department, entry.dept_name),
-        departmentId: firstNonEmpty(entry.department_id, entry.departmentId, entry.dept_id),
+        ...expenseDetailSplitRecord(entry),
         amount: toNum(entry.amount),
         splitType: entry.split_type || entry.splitType || '',
         note: entry.note || '',
