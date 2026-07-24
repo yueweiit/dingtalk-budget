@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { summarizeApprovedDetails } from '../routes/list.js';
+import {
+  reportingDepartmentKey,
+  summarizeApprovedDetails,
+} from '../routes/list.js';
 
 test('keeps approved expenses with identical names separate when department IDs differ', () => {
   const rows = summarizeApprovedDetails([
@@ -31,4 +34,24 @@ test('keeps approved expenses with identical names separate when department IDs 
   assert.deepEqual(rows.map((row) => row.department_identity_key).sort(), ['id:100', 'id:200']);
   assert.deepEqual(rows.map((row) => row.department_display), ['Sales Group', 'Sales Group']);
   assert.deepEqual(rows.map((row) => row.sub_department_display).sort(), ['Sales CN', 'Sales MX']);
+});
+
+test('uses the legacy department name key through June even when historical IDs differ', () => {
+  const oldBudget = {
+    dept_name: 'PD&PH 产品和采购Producto&Compras',
+    dept_id: '1060178527',
+  };
+  const oldExpenseSplit = {
+    department: 'PD&PH 产品和采购Producto&Compras',
+    department_id: '1059674330',
+  };
+
+  assert.equal(
+    reportingDepartmentKey(oldBudget, '2026-06'),
+    reportingDepartmentKey(oldExpenseSplit, '2026-06'),
+  );
+  assert.notEqual(
+    reportingDepartmentKey(oldBudget, '2026-07'),
+    reportingDepartmentKey(oldExpenseSplit, '2026-07'),
+  );
 });

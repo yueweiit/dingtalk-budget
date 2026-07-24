@@ -28,6 +28,19 @@ const departmentNameKey = (record = {}) => compactDeptKey(firstValue(record, [
   'applicant_department',
 ]));
 
+const monthOf = (record = {}) => String(firstValue(record, [
+  'budgetMonth',
+  'budget_month',
+  'declaration_month',
+  'queryMonth',
+  'query_month',
+])).trim();
+
+function usesHistoricalMatching(record = {}) {
+  const month = monthOf(record);
+  return Boolean(month && month < '2026-07');
+}
+
 export function departmentIdentityKey(record = {}) {
   const explicitKey = firstValue(record, [
     'reportingDepartmentIdentityKey',
@@ -45,6 +58,12 @@ export function departmentIdentityKey(record = {}) {
 }
 
 export function departmentMatches(target = {}, candidate = {}) {
+  if (usesHistoricalMatching(target) || usesHistoricalMatching(candidate)) {
+    const targetName = departmentNameKey(target);
+    const candidateName = departmentNameKey(candidate);
+    return Boolean(targetName && candidateName && targetName === candidateName);
+  }
+
   const targetId = departmentIdOf(target);
   const candidateId = departmentIdOf(candidate);
   if (targetId || candidateId) return Boolean(targetId && candidateId && targetId === candidateId);

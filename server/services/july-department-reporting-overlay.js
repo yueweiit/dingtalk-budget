@@ -10,6 +10,10 @@ function compact(value) {
   return String(value || '').trim();
 }
 
+export function usesNewDepartmentIdentity(month) {
+  return compact(month) >= '2026-07';
+}
+
 export function resolveJulyDepartmentReporting({ departmentId, month } = {}) {
   const sourceDepartmentId = compact(departmentId);
   if (compact(month) !== '2026-07') {

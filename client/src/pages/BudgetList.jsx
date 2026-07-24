@@ -469,6 +469,7 @@ function extractDetailSplits(item) {
     return dbSplits
       .map((entry) => ({
         ...expenseDetailSplitRecord(entry),
+        queryMonth: item?.query_month,
         amount: toNum(entry.amount),
         splitType: entry.split_type || entry.splitType || '',
         note: entry.note || '',
@@ -494,6 +495,7 @@ function extractDetailSplits(item) {
         rows.push({
           department,
           departmentId: firstNonEmpty(entry.department_id, entry.departmentId, entry.dept_id),
+          queryMonth: item?.query_month,
           amount,
           splitType,
           note: entry.note || '',

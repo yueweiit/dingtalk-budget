@@ -6,7 +6,10 @@ import {
   buildDepartmentPresentation,
   departmentIdentityKey,
 } from '../services/department-identity.js';
-import { applyJulyDepartmentReportingOverlay } from '../services/july-department-reporting-overlay.js';
+import {
+  applyJulyDepartmentReportingOverlay,
+  usesNewDepartmentIdentity,
+} from '../services/july-department-reporting-overlay.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
@@ -179,6 +182,9 @@ function reportingDepartmentKey(department, month) {
   const record = typeof department === 'string'
     ? { dept_name: department }
     : (department || {});
+  if (!usesNewDepartmentIdentity(formatMonth(month))) {
+    return compactDept(record.dept_name || record.department || record.applicant_department);
+  }
   const reporting = applyJulyDepartmentReportingOverlay(record, month);
   const departmentId = normalizeDept(reporting.reporting_dept_id);
   return departmentId ? `id:${departmentId}` : compactDept(reporting.reporting_dept_name);
@@ -849,7 +855,7 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
   const dept = normalizeDept(reportingDepartment.reporting_dept_name);
   if (!dept || !month) return '';
 
-  const identityKey = reportingDepartment.reporting_department_identity_key || departmentIdentityKey(department);
+  const identityKey = reportingDepartmentKey(department, month);
   const presentation = reportingDepartment.reporting_department_mapped
     ? { departmentDisplay: dept, subDepartmentDisplay: '' }
     : buildDepartmentPresentation(department);
@@ -918,6 +924,9 @@ function applyExpenseDetailReportingOverlay(details) {
       ? item.expense_splits.map((entry) => ({
         ...entry,
         ...applyJulyDepartmentReportingOverlay(splitDepartmentRecord(entry, item.business_id), month),
+        reporting_department_identity_key: reportingDepartmentKey(
+          splitDepartmentRecord(entry, item.business_id), month
+        ),
       }))
       : item?.expense_splits;
 
@@ -925,7 +934,7 @@ function applyExpenseDetailReportingOverlay(details) {
       ...item,
       reporting_dept_id: reporting.reporting_dept_id,
       reporting_dept_name: reporting.reporting_dept_name,
-      reporting_department_identity_key: reporting.reporting_department_identity_key,
+      reporting_department_identity_key: reportingDepartmentKey(expenseDepartmentRecord(item), month),
       reporting_department_mapped: reporting.reporting_department_mapped,
       ...(Array.isArray(splits) ? { expense_splits: splits } : {}),
     };
@@ -1375,7 +1384,7 @@ function withBudgetDepartmentPresentation(rows) {
     return {
       ...row,
       ...reporting,
-      department_identity_key: reporting.reporting_department_identity_key || presentation.identityKey,
+      department_identity_key: reportingDepartmentKey(row, budgetMonthOf(row)) || presentation.identityKey,
       department_display: presentation.departmentDisplay,
       sub_department_display: presentation.subDepartmentDisplay,
     };
@@ -1687,6 +1696,7 @@ export {
   buildBudgetedDepartmentMonthSet,
   filterExpenseDetailsForReport,
   isChinaExecutionRegion,
+  reportingDepartmentKey,
   shouldIncludeDepartmentExpense,
   summarizeApprovedDetails,
 };
