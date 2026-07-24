@@ -126,11 +126,7 @@ export const buildOperationRows = (records) => {
           basis: firstValue(item, ['calculation_basis', 'calculationBasis', 'budget_purpose_detail', 'budgetPurposeDetail', 'remark'], ''),
           applicationDate: formatDate(record.application_date),
           budgetMonth: formatMonth(record.budget_month || record.declaration_month),
-          deptName: record.dept_name,
-          deptId: record.dept_id,
-          departmentIdentityKey: departmentIdentityKey(record),
-          departmentDisplay: record.department_display,
-          subDepartmentDisplay: record.sub_department_display,
+          ...reportingDepartmentFields(record),
           status: record.status,
           createTime: record.create_time,
         });
@@ -149,11 +145,7 @@ export const buildOperationRows = (records) => {
         basis: record.remark,
         applicationDate: formatDate(record.application_date),
         budgetMonth: formatMonth(record.budget_month || record.declaration_month),
-        deptName: record.dept_name,
-        deptId: record.dept_id,
-        departmentIdentityKey: departmentIdentityKey(record),
-        departmentDisplay: record.department_display,
-        subDepartmentDisplay: record.sub_department_display,
+        ...reportingDepartmentFields(record),
         status: record.status,
         createTime: record.create_time,
       });
@@ -197,11 +189,7 @@ export const buildProductionRows = (records) => {
           remark: firstValue(item, ['remark'], record.remark || ''),
           applicationDate: formatDate(record.application_date),
           budgetMonth: formatMonth(record.budget_month || record.declaration_month),
-          deptName: record.dept_name,
-          deptId: record.dept_id,
-          departmentIdentityKey: departmentIdentityKey(record),
-          departmentDisplay: record.department_display,
-          subDepartmentDisplay: record.sub_department_display,
+          ...reportingDepartmentFields(record),
         });
       }
     }
@@ -227,11 +215,7 @@ export const buildProductionRows = (records) => {
         remark: record.remark,
         applicationDate: formatDate(record.application_date),
         budgetMonth: formatMonth(record.budget_month || record.declaration_month),
-        deptName: record.dept_name,
-        deptId: record.dept_id,
-        departmentIdentityKey: departmentIdentityKey(record),
-        departmentDisplay: record.department_display,
-        subDepartmentDisplay: record.sub_department_display,
+        ...reportingDepartmentFields(record),
       });
     }
   }
@@ -536,6 +520,27 @@ const executionMonthForBudgetRow = (row, reportMonth) => (
   row.budgetMonth || reportMonth || formatMonth(row.createTime || row.applicationDate) || 'Unspecified'
 );
 
+const reportingDepartmentFields = (record) => ({
+  deptName: departmentDisplayName(record),
+  deptId: firstValue(record, [
+    'reporting_dept_id',
+    'reportingDeptId',
+    'dept_id',
+    'deptId',
+  ]),
+  departmentIdentityKey: departmentIdentityKey(record),
+  departmentDisplay: departmentDisplayName(record),
+  subDepartmentDisplay: record?.reporting_dept_name || record?.reportingDeptName
+    ? ''
+    : firstValue(record, ['sub_department_display', 'subDepartmentDisplay']),
+  reporting_dept_id: firstValue(record, ['reporting_dept_id', 'reportingDeptId']),
+  reporting_dept_name: firstValue(record, ['reporting_dept_name', 'reportingDeptName']),
+  reporting_department_identity_key: firstValue(record, [
+    'reporting_department_identity_key',
+    'reportingDepartmentIdentityKey',
+  ]),
+});
+
 const addGroupedAmount = (map, row, amount, source, reportMonth) => {
   const deptName = departmentDisplayName(row);
   const departmentKey = departmentIdentityKey(row);
@@ -592,8 +597,8 @@ const extractExpenseDeptSplits = (item) => {
       const amt = toAmount(entry.amount);
       if (dept && amt > 0) {
         entries.push({
-          department: dept,
-          departmentId: entry.department_id || entry.departmentId || '',
+          department: departmentDisplayName(entry),
+          departmentId: firstValue(entry, ['reporting_dept_id', 'reportingDeptId', 'department_id', 'departmentId']),
           departmentIdentityKey: departmentIdentityKey(entry),
           amount: amt,
           splitType: entry.split_type || entry.splitType || '',
@@ -619,8 +624,8 @@ const extractExpenseDeptSplits = (item) => {
       const amt = toAmount(entry.amount);
       if (dept && amt > 0) {
         entries.push({
-          department: dept,
-          departmentId: entry.department_id || entry.departmentId || '',
+          department: departmentDisplayName(entry),
+          departmentId: firstValue(entry, ['reporting_dept_id', 'reportingDeptId', 'department_id', 'departmentId']),
           departmentIdentityKey: departmentIdentityKey(entry),
           amount: amt,
           splitType,
@@ -642,11 +647,17 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
 
       if (splits.length === 0) {
         // 无拆分：保持原有的单行
-        const department = firstValue(item, ['department_resolved', 'applicant_department', 'creator_department', 'query_department'], '');
+        const department = departmentDisplayName(item);
         return [{
           expenseKind: expenseKindLabel(item.expense_kind),
           department,
-          departmentId: firstValue(item, ['applicant_department_id', 'department_id', 'creator_department_id'], ''),
+          departmentId: firstValue(item, [
+            'reporting_dept_id',
+            'reportingDeptId',
+            'applicant_department_id',
+            'department_id',
+            'creator_department_id',
+          ], ''),
           departmentIdentityKey: departmentIdentityKey({ ...item, deptName: department, businessId: item.business_id }),
           month,
           businessId: item.business_id,

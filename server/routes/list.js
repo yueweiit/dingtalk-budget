@@ -6,6 +6,7 @@ import {
   buildDepartmentPresentation,
   departmentIdentityKey,
 } from '../services/department-identity.js';
+import { applyJulyDepartmentReportingOverlay } from '../services/july-department-reporting-overlay.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
@@ -174,8 +175,17 @@ function isChinaExecutionRegion(value) {
   return normalizeRegion(value) === 'CN';
 }
 
+function reportingDepartmentKey(department, month) {
+  const record = typeof department === 'string'
+    ? { dept_name: department }
+    : (department || {});
+  const reporting = applyJulyDepartmentReportingOverlay(record, month);
+  const departmentId = normalizeDept(reporting.reporting_dept_id);
+  return departmentId ? `id:${departmentId}` : compactDept(reporting.reporting_dept_name);
+}
+
 function budgetedDepartmentMonthKey(department, month) {
-  const departmentKey = compactDept(department);
+  const departmentKey = reportingDepartmentKey(department, month);
   const budgetMonth = formatMonth(month);
   return departmentKey && budgetMonth ? `${departmentKey}__${budgetMonth}` : '';
 }
@@ -192,7 +202,7 @@ function buildBudgetedDepartmentMonthSet(rows) {
   const result = new Set();
   for (const row of rows || []) {
     if (budgetAmountOf(row) <= 0) continue;
-    const key = budgetedDepartmentMonthKey(row?.dept_name, budgetMonthOf(row));
+    const key = budgetedDepartmentMonthKey(row, budgetMonthOf(row));
     if (key) result.add(key);
   }
   return result;
@@ -221,6 +231,30 @@ function submittedBudgetChinaWhere(alias) {
     ${submittedAmount} <= 0
     OR ${chinaExecutionRegionWhere(alias)}
   )`;
+}
+
+const excludedBudgetStatusKeywords = [
+  'cancel',
+  'reject',
+  'refuse',
+  'terminate',
+  'invalid',
+  'withdraw',
+  '\u64a4\u56de',
+  '\u64a4\u9500',
+  '\u53d6\u6d88',
+  '\u9a73\u56de',
+  '\u62d2\u7edd',
+  '\u7ec8\u6b62',
+  '\u4f5c\u5e9f',
+  '\u4e0d\u901a\u8fc7',
+];
+
+function validBudgetStatusWhere(alias) {
+  const status = `LOWER(COALESCE(${alias}.status, ''))`;
+  return `NOT (${excludedBudgetStatusKeywords
+    .map((keyword) => `${status} LIKE '%${keyword.toLowerCase()}%'`)
+    .join(' OR ')})`;
 }
 
 function rowRegion(row) {
@@ -319,7 +353,7 @@ function addDirectExpense(map, department, month, item, amount, budgetedDepartme
 }
 
 function addExpenseBreakdown(map, department, month, values = {}) {
-  const deptKey = compactDept(department);
+  const deptKey = reportingDepartmentKey(department, month);
   if (!deptKey || !month) return;
   const key = `${deptKey}__${month}`;
   const current = map.get(key) || {
@@ -428,9 +462,10 @@ function buildAllocatedExpenseItems(rows) {
 
   for (const row of rows || []) {
     const month = budgetMonthOf(row);
-    const dept = normalizeDept(row.dept_name);
+    const reporting = applyJulyDepartmentReportingOverlay(row, month);
+    const dept = normalizeDept(reporting.reporting_dept_name);
     if (!month || !dept) continue;
-    const key = `${compactDept(dept)}__${month}`;
+    const key = `${reportingDepartmentKey(row, month)}__${month}`;
     const current = grouped.get(key) || {
       department: dept,
       month,
@@ -514,9 +549,10 @@ async function attachExpenseAmounts(records, {
     const month = detailMonthMap.get(businessId);
     if (!month) continue;
     const item = detailByBusinessId.get(businessId);
-    if (!shouldIncludeDepartmentExpense(row.department, month, item?.execution_region, budgetedDepartmentMonths)) continue;
+    const department = splitDepartmentRecord(row, businessId);
+    if (!shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) continue;
     const category = splitExpenseCategory(row.split_type);
-    addExpenseBreakdown(expenseMap, row.department, month, {
+    addExpenseBreakdown(expenseMap, department, month, {
       [category]: numberValue(row.amount),
     });
   }
@@ -527,12 +563,12 @@ async function attachExpenseAmounts(records, {
     if (!month || amount <= 0) continue;
     const businessId = String(item.business_id || '').trim();
     if (businessId && splitBusinessIds.has(businessId)) continue;
-    addDirectExpense(expenseMap, expenseDepartment(item), month, item, amount, budgetedDepartmentMonths);
+    addDirectExpense(expenseMap, expenseDepartmentRecord(item), month, item, amount, budgetedDepartmentMonths);
   }
 
   return prepared.map((row, index) => {
     const month = budgetMonthOf(row);
-    const direct = expenseMap.get(`${compactDept(row.dept_name)}__${month}`) || {
+    const direct = expenseMap.get(`${reportingDepartmentKey(row, month)}__${month}`) || {
       operation: 0,
       purchase: 0,
       salary: 0,
@@ -809,15 +845,18 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
   const department = typeof departmentRecord === 'string'
     ? { dept_name: departmentRecord }
     : departmentRecord;
-  const dept = normalizeDept(department?.dept_name);
-  if (!dept || !month) return;
+  const reportingDepartment = applyJulyDepartmentReportingOverlay(department, month);
+  const dept = normalizeDept(reportingDepartment.reporting_dept_name);
+  if (!dept || !month) return '';
 
-  const identityKey = departmentIdentityKey(department);
-  const presentation = buildDepartmentPresentation(department);
+  const identityKey = reportingDepartment.reporting_department_identity_key || departmentIdentityKey(department);
+  const presentation = reportingDepartment.reporting_department_mapped
+    ? { departmentDisplay: dept, subDepartmentDisplay: '' }
+    : buildDepartmentPresentation(department);
   const key = `${identityKey}__${month}`;
   const current = grouped.get(key) || {
     department: dept,
-    department_id: department?.dept_id || null,
+    department_id: reportingDepartment.reporting_dept_id || null,
     department_source: department?.dept_source || 'name_only',
     department_path_names: department?.dept_path_names || null,
     department_identity_key: identityKey,
@@ -843,6 +882,7 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
   current.operationCount += numberValue(values.operationCount);
   current.purchaseCount += numberValue(values.purchaseCount);
   grouped.set(key, current);
+  return identityKey;
 }
 
 function splitRowsOf(item) {
@@ -870,22 +910,47 @@ function splitRowsOf(item) {
   }));
 }
 
+function applyExpenseDetailReportingOverlay(details) {
+  return (details || []).map((item) => {
+    const month = item.query_month || approvedDetailMonth(item);
+    const reporting = applyJulyDepartmentReportingOverlay(expenseDepartmentRecord(item), month);
+    const splits = Array.isArray(item?.expense_splits)
+      ? item.expense_splits.map((entry) => ({
+        ...entry,
+        ...applyJulyDepartmentReportingOverlay(splitDepartmentRecord(entry, item.business_id), month),
+      }))
+      : item?.expense_splits;
+
+    return {
+      ...item,
+      reporting_dept_id: reporting.reporting_dept_id,
+      reporting_dept_name: reporting.reporting_dept_name,
+      reporting_department_identity_key: reporting.reporting_department_identity_key,
+      reporting_department_mapped: reporting.reporting_department_mapped,
+      ...(Array.isArray(splits) ? { expense_splits: splits } : {}),
+    };
+  });
+}
+
 function filterExpenseDetailsForReport(details, budgetedDepartmentMonths = new Set()) {
-  return (details || []).flatMap((item) => {
+  const visibleDetails = (details || []).flatMap((item) => {
     const month = item.query_month || approvedDetailMonth(item);
     const splits = Array.isArray(item?.expense_splits) ? item.expense_splits : [];
     if (splits.length === 0) {
       return shouldIncludeDepartmentExpense(
-        expenseDepartment(item), month, item.execution_region, budgetedDepartmentMonths
+        expenseDepartmentRecord(item), month, item.execution_region, budgetedDepartmentMonths
       ) ? [item] : [];
     }
 
     const visibleSplits = splits.filter((entry) => (
-      shouldIncludeDepartmentExpense(entry.department, month, item.execution_region, budgetedDepartmentMonths)
+      shouldIncludeDepartmentExpense(
+        splitDepartmentRecord(entry, item.business_id), month, item.execution_region, budgetedDepartmentMonths
+      )
     ));
     if (visibleSplits.length === 0) return [];
     return [{ ...item, expense_splits: visibleSplits }];
   });
+  return applyExpenseDetailReportingOverlay(visibleDetails);
 }
 
 function roundApprovedExpenseItems(items) {
@@ -949,19 +1014,17 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
       else values.managementTotal = entry.amount;
 
       const departmentRecord = splitDepartmentRecord(entry, item.business_id);
-      addApprovedExpenseGroup(grouped, departmentRecord, month, values);
-      touchedDepartments.add(departmentIdentityKey(departmentRecord));
+      touchedDepartments.add(addApprovedExpenseGroup(grouped, departmentRecord, month, values));
     }
 
     const remainder = Number((amount - classifiedSplitTotal).toFixed(2));
     if (remainder > 0.01 && shouldIncludeDepartmentExpense(
       directDepartment, month, item.execution_region, budgetedDepartmentMonths
     )) {
-      addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
+      touchedDepartments.add(addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
         operationTotal: remainder,
         managementTotal: remainder,
-      });
-      touchedDepartments.add(departmentIdentityKey(directDepartmentRecord));
+      }));
     }
 
     for (const deptKey of touchedDepartments) {
@@ -1170,6 +1233,8 @@ function buildBudgetWhere(alias, { startDate, endDate, status } = {}, { filterEx
     budgetMonthExprFor(alias)
   ));
 
+  whereClause += ` AND ${validBudgetStatusWhere(alias)}`;
+
   if (filterExecutionRegion) {
     whereClause += ` AND ${submittedBudgetChinaWhere(alias)}`;
   }
@@ -1303,10 +1368,14 @@ function nonProductionBudgetCte(whereClause) {
 
 function withBudgetDepartmentPresentation(rows) {
   return rows.map((row) => {
-    const presentation = buildDepartmentPresentation(row);
+    const reporting = applyJulyDepartmentReportingOverlay(row, budgetMonthOf(row));
+    const presentation = reporting.reporting_department_mapped
+      ? { departmentDisplay: reporting.reporting_dept_name, subDepartmentDisplay: '' }
+      : buildDepartmentPresentation(row);
     return {
       ...row,
-      department_identity_key: presentation.identityKey,
+      ...reporting,
+      department_identity_key: reporting.reporting_department_identity_key || presentation.identityKey,
       department_display: presentation.departmentDisplay,
       sub_department_display: presentation.subDepartmentDisplay,
     };
@@ -1495,6 +1564,7 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)
          FROM production_budget p
          WHERE DATE(p.create_time) = $1
+           AND ${validBudgetStatusWhere('p')}
            AND ${submittedBudgetChinaWhere('p')}
            AND (
              EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
@@ -1504,6 +1574,7 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)
          FROM non_production_budget n
          WHERE DATE(n.create_time) = $1
+           AND ${validBudgetStatusWhere('n')}
            AND ${submittedBudgetChinaWhere('n')}
            AND (
              EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
@@ -1611,8 +1682,10 @@ router.get('/report', async (req, res) => {
 
 export {
   approvalExpenseDateExpr,
+  applyExpenseDetailReportingOverlay,
   buildBudgetWhere,
   buildBudgetedDepartmentMonthSet,
+  filterExpenseDetailsForReport,
   isChinaExecutionRegion,
   shouldIncludeDepartmentExpense,
   summarizeApprovedDetails,

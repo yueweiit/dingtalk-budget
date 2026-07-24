@@ -13,6 +13,8 @@ const firstValue = (record, keys) => {
 };
 
 const departmentIdOf = (record = {}) => String(firstValue(record, [
+  'reportingDeptId',
+  'reporting_dept_id',
   'deptId',
   'dept_id',
   'departmentId',
@@ -27,7 +29,12 @@ const departmentNameKey = (record = {}) => compactDeptKey(firstValue(record, [
 ]));
 
 export function departmentIdentityKey(record = {}) {
-  const explicitKey = firstValue(record, ['departmentIdentityKey', 'department_identity_key']);
+  const explicitKey = firstValue(record, [
+    'reportingDepartmentIdentityKey',
+    'reporting_department_identity_key',
+    'departmentIdentityKey',
+    'department_identity_key',
+  ]);
   if (explicitKey) return String(explicitKey);
 
   const departmentId = departmentIdOf(record);
@@ -48,6 +55,14 @@ export function departmentMatches(target = {}, candidate = {}) {
 }
 
 export function departmentDisplayName(record = {}) {
+  const reportingDepartment = firstValue(record, [
+    'reportingDepartmentDisplay',
+    'reporting_department_display',
+    'reportingDeptName',
+    'reporting_dept_name',
+  ]);
+  if (reportingDepartment) return String(reportingDepartment);
+
   const parentDepartment = firstValue(record, ['departmentDisplay', 'department_display']);
   const subDepartment = firstValue(record, ['subDepartmentDisplay', 'sub_department_display']);
   const fallback = firstValue(record, ['deptName', 'dept_name', 'department', 'applicant_department']);

@@ -55,6 +55,15 @@ test('budget list queries restrict China execution region for nonzero budget amo
   assert.match(whereClause, /n\.budget_amount/i);
 });
 
+test('budget queries exclude withdrawn and rejected budget applications by default', () => {
+  const { whereClause } = buildBudgetWhere('n', {}, { filterExecutionRegion: false });
+
+  assert.match(whereClause, /n\.status/i);
+  assert.match(whereClause, /撤销/);
+  assert.match(whereClause, /撤回/);
+  assert.match(whereClause, /驳回/);
+});
+
 test('Mexico split is excluded for a department with a budget and keeps other departments', () => {
   const budgetedDepartments = buildBudgetedDepartmentMonthSet([
     {
