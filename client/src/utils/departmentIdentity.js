@@ -12,6 +12,18 @@ const firstValue = (record, keys) => {
   return '';
 };
 
+const localDepartmentIdOf = (record = {}) => String(firstValue(record, [
+  'deptId',
+  'dept_id',
+  'departmentId',
+  'department_id',
+])).trim();
+
+const rollupDepartmentIdOf = (record = {}) => String(firstValue(record, [
+  'rollupDeptId',
+  'rollup_dept_id',
+])).trim();
+
 const departmentIdOf = (record = {}) => String(firstValue(record, [
   'reportingDeptId',
   'reporting_dept_id',
@@ -57,15 +69,20 @@ export function departmentIdentityKey(record = {}) {
   return `legacy:${recordId}:${departmentNameKey(record)}`;
 }
 
-export function departmentMatches(target = {}, candidate = {}) {
+export function departmentMatches(target = {}, candidate = {}, options = {}) {
   if (usesHistoricalMatching(target) || usesHistoricalMatching(candidate)) {
     const targetName = departmentNameKey(target);
     const candidateName = departmentNameKey(candidate);
     return Boolean(targetName && candidateName && targetName === candidateName);
   }
 
-  const targetId = departmentIdOf(target);
-  const candidateId = departmentIdOf(candidate);
+  const departmentId = options.preferLocalDepartmentId
+    ? localDepartmentIdOf
+    : departmentIdOf;
+  const targetId = departmentId(target);
+  const candidateId = options.includeRollupDepartment
+    ? rollupDepartmentIdOf(candidate) || departmentId(candidate)
+    : departmentId(candidate);
   if (targetId || candidateId) return Boolean(targetId && candidateId && targetId === candidateId);
 
   const targetName = departmentNameKey(target);

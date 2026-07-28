@@ -529,7 +529,15 @@ const reportingDepartmentFields = (record) => ({
     'deptId',
   ]),
   departmentIdentityKey: departmentIdentityKey(record),
-  departmentDisplay: departmentDisplayName(record),
+  departmentDisplay: firstValue(record, [
+    'department_display',
+    'departmentDisplay',
+    'reporting_dept_name',
+    'reportingDeptName',
+    'dept_name',
+    'deptName',
+    'department',
+  ]),
   subDepartmentDisplay: record?.reporting_dept_name || record?.reportingDeptName
     ? ''
     : firstValue(record, ['sub_department_display', 'subDepartmentDisplay']),
@@ -539,7 +547,28 @@ const reportingDepartmentFields = (record) => ({
     'reporting_department_identity_key',
     'reportingDepartmentIdentityKey',
   ]),
+  sharedBudgetChild: Boolean(record?.shared_budget_child || record?.sharedBudgetChild),
+  sharedBudgetParentAmount: firstValue(record, [
+    'shared_budget_parent_amount',
+    'sharedBudgetParentAmount',
+  ]),
+  budgetAmountForTotals: firstValue(record, [
+    'budget_amount_for_totals',
+    'budgetAmountForTotals',
+  ]),
 });
+
+const isSharedBudgetChild = (row) => Boolean(row?.shared_budget_child || row?.sharedBudgetChild);
+
+const budgetAmountForTotals = (row, fallback) => {
+  if (isSharedBudgetChild(row)) return 0;
+  return toAmount(firstValue(row, ['budgetAmountForTotals', 'budget_amount_for_totals'], fallback));
+};
+
+const budgetDisplayValue = (row, fallback) => {
+  if (!isSharedBudgetChild(row)) return fallback;
+  return `共享：${toAmount(firstValue(row, ['sharedBudgetParentAmount', 'shared_budget_parent_amount'], fallback)).toFixed(2)}`;
+};
 
 const addGroupedAmount = (map, row, amount, source, reportMonth) => {
   const deptName = departmentDisplayName(row);
@@ -559,6 +588,8 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
     officeApproved: 0,
     taxApproved: 0,
     budgetSubmittedApprovedTotal: 0,
+    budgetSubmitted: false,
+    sharedBudgetChild: false,
     operationCount: 0,
     purchaseCount: 0,
   };
@@ -568,6 +599,8 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
   } else {
     current.nonProductionBudget += amount;
   }
+  current.budgetSubmitted ||= amount > 0 || isSharedBudgetChild(row);
+  current.sharedBudgetChild ||= isSharedBudgetChild(row);
 
   map.set(key, current);
 };
@@ -603,6 +636,7 @@ const extractExpenseDeptSplits = (item) => {
           amount: amt,
           splitType: entry.split_type || entry.splitType || '',
           note: entry.note || '',
+          rollupDepartment: firstValue(entry, ['rollup_dept_name', 'rollupDeptName']),
         });
       }
     }
@@ -630,6 +664,7 @@ const extractExpenseDeptSplits = (item) => {
           amount: amt,
           splitType,
           note: entry.note || '',
+          rollupDepartment: firstValue(entry, ['rollup_dept_name', 'rollupDeptName']),
         });
       }
     }
@@ -670,6 +705,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
           approvalCompletedAt: formatDate(item.approval_completed_at),
           bizAction: item.biz_action,
           splitNote: '',
+          rollupDepartment: firstValue(item, ['rollup_dept_name', 'rollupDeptName']),
         }];
       }
 
@@ -693,6 +729,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
         approvalCompletedAt: formatDate(item.approval_completed_at),
         bizAction: item.biz_action,
         splitNote: `${splitTypeLabel(entry.splitType)}拆分自 ${item.business_id || ''}${entry.note ? `：${entry.note}` : ''}`,
+        rollupDepartment: entry.rollupDepartment || firstValue(item, ['rollup_dept_name', 'rollupDeptName']),
       }));
     })
     .sort((a, b) => String(a.month).localeCompare(String(b.month)) || String(a.department).localeCompare(String(b.department)));
@@ -701,11 +738,11 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
   const grouped = new Map();
 
   for (const row of productionRows) {
-    addGroupedAmount(grouped, row, toAmount(row.requestAmount), 'production', reportMonth);
+    addGroupedAmount(grouped, row, budgetAmountForTotals(row, row.requestAmount), 'production', reportMonth);
   }
 
   for (const row of operationRows) {
-    addGroupedAmount(grouped, row, toAmount(row.amount), 'nonProduction', reportMonth);
+    addGroupedAmount(grouped, row, budgetAmountForTotals(row, row.amount), 'nonProduction', reportMonth);
   }
 
   for (const item of approvedExpenses || []) {
@@ -726,6 +763,8 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       officeApproved: 0,
       taxApproved: 0,
       budgetSubmittedApprovedTotal: 0,
+      budgetSubmitted: false,
+      sharedBudgetChild: false,
       operationCount: 0,
       purchaseCount: 0,
     };
@@ -738,7 +777,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
     current.taxApproved += toAmount(item.taxTotal);
     current.operationCount += Number(item.operationCount || 0);
     current.purchaseCount += Number(item.purchaseCount || 0);
-    if ((toAmount(current.productionBudget) + toAmount(current.nonProductionBudget)) > 0) {
+    if (current.budgetSubmitted) {
       const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.officeTotal) + toAmount(item.taxTotal);
       const fallbackApproved = toAmount(item.operationTotal) + toAmount(item.purchaseTotal);
       current.budgetSubmittedApprovedTotal += classifiedApproved > 0 ? classifiedApproved : fallbackApproved;
@@ -758,6 +797,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
         totalBudget,
         totalApproved,
         budgetSubmittedApprovedTotal: toAmount(row.budgetSubmittedApprovedTotal),
+        sharedBudgetChild: Boolean(row.sharedBudgetChild),
         remainingBudget: totalBudget - totalApproved,
         executionRate: totalBudget > 0 ? `${((totalApproved / totalBudget) * 100).toFixed(2)}%` : '',
       };
@@ -832,7 +872,7 @@ const groupShareRows = (rows, groupKeys, amountKey) => {
 
 const buildBudgetShareRows = ({ productionRows, operationRows, reportMonth }) => {
   const rows = [
-    ...operationRows.map((row) => ({
+    ...operationRows.filter((row) => !isSharedBudgetChild(row)).map((row) => ({
       department: departmentDisplayName(row),
       departmentIdentityKey: departmentIdentityKey(row),
       month: executionMonthForBudgetRow(row, reportMonth),
@@ -841,7 +881,7 @@ const buildBudgetShareRows = ({ productionRows, operationRows, reportMonth }) =>
       amount: toAmount(row.amount),
       formNo: row.formNo,
     })),
-    ...productionRows.map((row) => ({
+    ...productionRows.filter((row) => !isSharedBudgetChild(row)).map((row) => ({
       department: departmentDisplayName(row),
       departmentIdentityKey: departmentIdentityKey(row),
       month: executionMonthForBudgetRow(row, reportMonth),
@@ -877,12 +917,15 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   const approvedDetailRows = buildApprovedDetailRows(approvedExpenseDetails);
   const budgetShareRows = buildBudgetShareRows({ productionRows, operationRows, reportMonth });
   const expenseShareRows = buildExpenseShareRows(approvedDetailRows);
+  const productionBudgetRecords = production.filter((row) => !isSharedBudgetChild(row));
+  const nonProductionBudgetRecords = nonProduction.filter((row) => !isSharedBudgetChild(row));
 
   const operationSheetRows = [
-    ['序号', '所属部门', '预算类型', '申请日期', '预算月份', '预算项目', '预算金额', '币种', '明细项目', '明细金额', '计算依据', '表单编号', '状态', '创建日期'],
+    ['序号', '所属部门', '预算归属', '预算类型', '申请日期', '预算月份', '预算项目', '预算金额', '币种', '明细项目', '明细金额', '计算依据', '表单编号', '状态', '创建日期'],
     ...operationRows.map((row, index) => [
       index + 1,
       row.deptName,
+      row.sharedBudgetChild ? '共享父部门预算' : '本部门预算',
       row.budgetType,
       row.applicationDate,
       row.budgetMonth,
@@ -890,7 +933,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.originalAmount,
       row.currency,
       row.detailItem,
-      row.amount,
+      budgetDisplayValue(row, row.amount),
       row.basis,
       row.formNo,
       row.status,
@@ -899,10 +942,11 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const productionSheetRows = [
-    ['序号', '所属部门', '预算类型', '申请日期', '预算周期', '预算类别', '明细类别', '编码/费用明细', '规格/产线/岗位', '单位', '单价', '预计加班时长', '加班单价', '预算加班费', '月度预算总量', '本次申请数量', '本次申请金额', '上期已用', '用途/费用归属', '经办人', '备注', '表单编号'],
+    ['序号', '所属部门', '预算归属', '预算类型', '申请日期', '预算周期', '预算类别', '明细类别', '编码/费用明细', '规格/产线/岗位', '单位', '单价', '预计加班时长', '加班单价', '预算加班费', '月度预算总量', '本次申请数量', '本次申请金额', '上期已用', '用途/费用归属', '经办人', '备注', '表单编号'],
     ...productionRows.map((row, index) => [
       index + 1,
       row.deptName,
+      row.sharedBudgetChild ? '共享父部门预算' : '本部门预算',
       '生产预算',
       row.applicationDate,
       row.budgetMonth,
@@ -915,7 +959,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.overtimeHours,
       row.overtimePrice,
       row.overtimeAmount,
-      row.monthlyTotal,
+      budgetDisplayValue(row, row.monthlyTotal),
       row.requestQty,
       row.requestAmount,
       row.previousUsed,
@@ -927,10 +971,11 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const executionSheetRows = [
-    ['序号', '所属部门', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '办公场地支出', '个税支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
+    ['序号', '所属部门', '预算归属', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '办公场地支出', '个税支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
     ...executionRows.map((row, index) => [
       index + 1,
       row.deptName,
+      row.sharedBudgetChild ? '共享父部门预算' : '本部门预算',
       row.budgetMonth,
       row.productionBudget.toFixed(2),
       row.nonProductionBudget.toFixed(2),
@@ -949,8 +994,8 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
 
   const summarySheetRows = [
     ['指标', '数值'],
-    ['生产预算单数', production.length],
-    ['非生产预算单数', nonProduction.length],
+    ['生产预算单数', productionBudgetRecords.length],
+    ['非生产预算单数', nonProductionBudgetRecords.length],
     ['生产预算明细行数', productionRows.length],
     ['非生产预算明细行数', operationRows.length],
     ['实际支出明细行数', approvedDetailRows.length],
@@ -965,17 +1010,17 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
   ];
 
-  executionSheetRows[0].splice(10, 0, '有提交预算部门支出合计');
+  executionSheetRows[0].splice(11, 0, '有提交预算部门支出合计');
   for (let i = 1; i < executionSheetRows.length; i += 1) {
-    executionSheetRows[i].splice(10, 0, executionRows[i - 1].budgetSubmittedApprovedTotal.toFixed(2));
+    executionSheetRows[i].splice(11, 0, executionRows[i - 1].budgetSubmittedApprovedTotal.toFixed(2));
   }
 
   summarySheetRows.splice(
     0,
     summarySheetRows.length,
     ...buildReportSummaryRows({
-      productionCount: production.length,
-      nonProductionCount: nonProduction.length,
+      productionCount: productionBudgetRecords.length,
+      nonProductionCount: nonProductionBudgetRecords.length,
       productionRows,
       operationRows,
       approvedDetailRows,
@@ -986,11 +1031,12 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   );
 
   const approvedDetailSheetRows = [
-    ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '业务动作', '备注'],
+    ['序号', '支出类型', '所属部门', '汇总部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '业务动作', '备注'],
     ...approvedDetailRows.map((row, index) => [
       index + 1,
       row.expenseKind,
       row.department,
+      row.rollupDepartment || row.department,
       row.month,
       row.businessId,
       row.title,
@@ -1040,6 +1086,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   // 1. 部门预算分布（Top 12）
   const deptBudgetMap = new Map();
   for (const row of productionRows) {
+    if (isSharedBudgetChild(row)) continue;
     const dept = departmentDisplayName(row);
     const key = departmentIdentityKey(row);
     const amt = toAmount(row.requestAmount);
@@ -1048,6 +1095,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     deptBudgetMap.set(key, cur);
   }
   for (const row of operationRows) {
+    if (isSharedBudgetChild(row)) continue;
     const dept = departmentDisplayName(row);
     const key = departmentIdentityKey(row);
     const amt = toAmount(row.amount);
@@ -1062,12 +1110,14 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   // 2. 2026年月度预算趋势
   const monthTrendMap = new Map();
   for (const row of productionRows) {
+    if (isSharedBudgetChild(row)) continue;
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
     const cur = monthTrendMap.get(month) || { month, production: 0, nonProduction: 0 };
     cur.production += toAmount(row.requestAmount);
     monthTrendMap.set(month, cur);
   }
   for (const row of operationRows) {
+    if (isSharedBudgetChild(row)) continue;
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
     const cur = monthTrendMap.get(month) || { month, production: 0, nonProduction: 0 };
     cur.nonProduction += toAmount(row.amount);
@@ -1078,8 +1128,8 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     .sort((a, b) => String(a.month).localeCompare(String(b.month)));
 
   // 3. 预算类型占比（生产 vs 非生产）
-  const productionGrandTotal = productionRows.reduce((s, r) => s + toAmount(r.requestAmount), 0);
-  const nonProductionGrandTotal = operationRows.reduce((s, r) => s + toAmount(r.amount), 0);
+  const productionGrandTotal = productionRows.reduce((s, r) => s + budgetAmountForTotals(r, r.requestAmount), 0);
+  const nonProductionGrandTotal = operationRows.reduce((s, r) => s + budgetAmountForTotals(r, r.amount), 0);
   const grandTotal = productionGrandTotal + nonProductionGrandTotal;
 
   // 4. 部门执行率（Top 10）
@@ -1162,14 +1212,14 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     return '';
   };
   const regionMap = new Map();
-  for (const r of production) {
+  for (const r of productionBudgetRecords) {
     const region = normalizeRegion(r.execution_region);
     if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
     cur.production += toAmount(r.total_amount || r.monthly_budget_amount);
     regionMap.set(region, cur);
   }
-  for (const r of nonProduction) {
+  for (const r of nonProductionBudgetRecords) {
     const region = normalizeRegion(r.execution_region);
     if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
@@ -1201,7 +1251,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     cur.executed += toAmount(row.totalApproved);
     execStatusMap.set(key, cur);
   }
-  for (const r of production) {
+  for (const r of productionBudgetRecords) {
     if (r.status === '审批中') {
       const dept = departmentDisplayName(r);
       const key = departmentIdentityKey(r);
@@ -1210,7 +1260,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       execStatusMap.set(key, cur);
     }
   }
-  for (const r of nonProduction) {
+  for (const r of nonProductionBudgetRecords) {
     if (r.status === '审批中') {
       const dept = departmentDisplayName(r);
       const key = departmentIdentityKey(r);
