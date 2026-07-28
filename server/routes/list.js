@@ -10,6 +10,12 @@ import {
   applyJulyDepartmentReportingOverlay,
   usesNewDepartmentIdentity,
 } from '../services/july-department-reporting-overlay.js';
+import {
+  rollupYWTechBudgetRows,
+  rollupYWTechApprovedExpenseSummaries,
+  sharedBudgetDepartmentRecords,
+  ywTechSharedBudgetRollupDepartment,
+} from '../services/yw-tech-shared-budget.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
@@ -208,8 +214,10 @@ function buildBudgetedDepartmentMonthSet(rows) {
   const result = new Set();
   for (const row of rows || []) {
     if (budgetAmountOf(row) <= 0) continue;
-    const key = budgetedDepartmentMonthKey(row, budgetMonthOf(row));
-    if (key) result.add(key);
+    for (const departmentRecord of sharedBudgetDepartmentRecords(row)) {
+      const key = budgetedDepartmentMonthKey(departmentRecord, budgetMonthOf(row));
+      if (key) result.add(key);
+    }
   }
   return result;
 }
@@ -572,7 +580,7 @@ async function attachExpenseAmounts(records, {
     addDirectExpense(expenseMap, expenseDepartmentRecord(item), month, item, amount, budgetedDepartmentMonths);
   }
 
-  return prepared.map((row, index) => {
+  const rowsWithExpense = prepared.flatMap(sharedBudgetDepartmentRecords).map((row) => {
     const month = budgetMonthOf(row);
     const direct = expenseMap.get(`${reportingDepartmentKey(row, month)}__${month}`) || {
       operation: 0,
@@ -611,6 +619,8 @@ async function attachExpenseAmounts(records, {
       },
     };
   });
+
+  return rollupYWTechBudgetRows(rowsWithExpense);
 }
 
 function approvedDetailMonth(item) {
@@ -920,14 +930,21 @@ function applyExpenseDetailReportingOverlay(details) {
   return (details || []).map((item) => {
     const month = item.query_month || approvedDetailMonth(item);
     const reporting = applyJulyDepartmentReportingOverlay(expenseDepartmentRecord(item), month);
+    const rollupDepartment = ywTechSharedBudgetRollupDepartment(expenseDepartmentRecord(item), month);
     const splits = Array.isArray(item?.expense_splits)
-      ? item.expense_splits.map((entry) => ({
-        ...entry,
-        ...applyJulyDepartmentReportingOverlay(splitDepartmentRecord(entry, item.business_id), month),
-        reporting_department_identity_key: reportingDepartmentKey(
-          splitDepartmentRecord(entry, item.business_id), month
-        ),
-      }))
+      ? item.expense_splits.map((entry) => {
+        const department = splitDepartmentRecord(entry, item.business_id);
+        const splitRollupDepartment = ywTechSharedBudgetRollupDepartment(department, month);
+        return {
+          ...entry,
+          ...applyJulyDepartmentReportingOverlay(department, month),
+          reporting_department_identity_key: reportingDepartmentKey(department, month),
+          ...(splitRollupDepartment ? {
+            rollup_dept_id: splitRollupDepartment.department_id,
+            rollup_dept_name: splitRollupDepartment.department_name,
+          } : {}),
+        };
+      })
       : item?.expense_splits;
 
     return {
@@ -936,6 +953,10 @@ function applyExpenseDetailReportingOverlay(details) {
       reporting_dept_name: reporting.reporting_dept_name,
       reporting_department_identity_key: reportingDepartmentKey(expenseDepartmentRecord(item), month),
       reporting_department_mapped: reporting.reporting_department_mapped,
+      ...(rollupDepartment ? {
+        rollup_dept_id: rollupDepartment.department_id,
+        rollup_dept_name: rollupDepartment.department_name,
+      } : {}),
       ...(Array.isArray(splits) ? { expense_splits: splits } : {}),
     };
   });
@@ -1462,9 +1483,8 @@ router.get('/production', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const db = { query };
     const filters = { startDate, endDate, status };
-    const [dataRows, total, budgetedDepartmentMonths] = await Promise.all([
-      fetchProductionBudgetRows(db, filters, { limit: Number(pageSize), offset }),
-      countProductionBudgetRows(db, filters),
+    const [dataRows, budgetedDepartmentMonths] = await Promise.all([
+      fetchProductionBudgetRows(db, filters),
       fetchBudgetedDepartmentMonthSet(db, filters),
     ]);
     const rowsWithExpense = await attachExpenseAmounts(dataRows, {
@@ -1475,8 +1495,8 @@ router.get('/production', async (req, res) => {
 
     res.json({
       success: true,
-      data: rowsWithExpense,
-      total,
+      data: rowsWithExpense.slice(offset, offset + Number(pageSize)),
+      total: rowsWithExpense.length,
       page: parseInt(page),
       pageSize: parseInt(pageSize),
     });
@@ -1493,9 +1513,8 @@ router.get('/non-production', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const db = { query };
     const filters = { startDate, endDate, status };
-    const [dataRows, total, budgetedDepartmentMonths] = await Promise.all([
-      fetchNonProductionBudgetRows(db, filters, { limit: Number(pageSize), offset }),
-      countNonProductionBudgetRows(db, filters),
+    const [dataRows, budgetedDepartmentMonths] = await Promise.all([
+      fetchNonProductionBudgetRows(db, filters),
       fetchBudgetedDepartmentMonthSet(db, filters),
     ]);
     const rowsWithExpense = await attachExpenseAmounts(dataRows, {
@@ -1506,8 +1525,8 @@ router.get('/non-production', async (req, res) => {
 
     res.json({
       success: true,
-      data: rowsWithExpense,
-      total,
+      data: rowsWithExpense.slice(offset, offset + Number(pageSize)),
+      total: rowsWithExpense.length,
       page: parseInt(page),
       pageSize: parseInt(pageSize),
     });
@@ -1642,7 +1661,9 @@ router.get('/report', async (req, res) => {
     const shouldIncludeApproved = String(includeApproved || '') === '1';
     if (shouldIncludeApproved) {
       const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
-      approvedItems = summarizeApprovedDetails(approved.details, budgetedDepartmentMonths);
+      approvedItems = rollupYWTechApprovedExpenseSummaries(
+        summarizeApprovedDetails(approved.details, budgetedDepartmentMonths)
+      );
       approvedDetails = approved.details;
       reportApprovedDetails = filterExpenseDetailsForReport(approved.details, budgetedDepartmentMonths);
       warnings = approved.warnings;
@@ -1692,6 +1713,7 @@ router.get('/report', async (req, res) => {
 export {
   approvalExpenseDateExpr,
   applyExpenseDetailReportingOverlay,
+  attachExpenseAmounts,
   buildBudgetWhere,
   buildBudgetedDepartmentMonthSet,
   filterExpenseDetailsForReport,

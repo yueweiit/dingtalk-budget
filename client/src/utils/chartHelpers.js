@@ -1,6 +1,12 @@
 import { toAmount, formatMonth } from './xlsxReport.js';
 import { departmentDisplayName, departmentIdentityKey } from './departmentIdentity.js';
 
+const isSharedBudgetChild = (row) => Boolean(row?.shared_budget_child || row?.sharedBudgetChild);
+
+const budgetAmountForTotals = (row, fallback) => (
+  isSharedBudgetChild(row) ? 0 : toAmount(fallback)
+);
+
 function aggregateExecutionRowsByDept(executionRows) {
   const deptMap = new Map();
 
@@ -13,6 +19,7 @@ function aggregateExecutionRowsByDept(executionRows) {
       budgetTotal: 0,
       approvedTotal: 0,
       budgetSubmittedApprovedTotal: 0,
+      sharedBudgetChild: false,
       remaining: 0,
       operationApproved: 0,
       purchaseApproved: 0,
@@ -23,6 +30,7 @@ function aggregateExecutionRowsByDept(executionRows) {
     current.budgetTotal += toAmount(row.totalBudget);
     current.approvedTotal += toAmount(row.totalApproved);
     current.budgetSubmittedApprovedTotal += toAmount(row.budgetSubmittedApprovedTotal);
+    current.sharedBudgetChild ||= isSharedBudgetChild(row);
     current.remaining += toAmount(row.remainingBudget);
     current.operationApproved += toAmount(row.operationApproved);
     current.purchaseApproved += toAmount(row.purchaseApproved);
@@ -44,7 +52,7 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
   for (const row of productionRows) {
     const dept = departmentDisplayName(row);
     const key = departmentIdentityKey(row);
-    const amount = toAmount(row.requestAmount);
+    const amount = budgetAmountForTotals(row, row.requestAmount);
     const current = deptMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
     current.production += amount;
     deptMap.set(key, current);
@@ -53,7 +61,7 @@ export function buildDeptBudgetSummary(productionRows, operationRows) {
   for (const row of operationRows) {
     const dept = departmentDisplayName(row);
     const key = departmentIdentityKey(row);
-    const amount = toAmount(row.amount);
+    const amount = budgetAmountForTotals(row, row.amount);
     const current = deptMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
     current.nonProduction += amount;
     deptMap.set(key, current);
@@ -107,14 +115,14 @@ export function buildBudgetTrend(productionRows, operationRows) {
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
     if (!shouldIncludeMonth(month)) continue;
     const current = ensureMonth(month);
-    current.production += toAmount(row.requestAmount);
+    current.production += budgetAmountForTotals(row, row.requestAmount);
   }
 
   for (const row of operationRows) {
     const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
     if (!shouldIncludeMonth(month)) continue;
     const current = ensureMonth(month);
-    current.nonProduction += toAmount(row.amount);
+    current.nonProduction += budgetAmountForTotals(row, row.amount);
   }
 
   for (const row of approvedDetailRows) {
@@ -137,8 +145,8 @@ export function buildBudgetTrend(productionRows, operationRows) {
  * 返回格式: [{ name, value }]
  */
 export function buildBudgetTypeDistribution(productionRows, operationRows) {
-  const productionTotal = productionRows.reduce((sum, r) => sum + toAmount(r.requestAmount), 0);
-  const nonProductionTotal = operationRows.reduce((sum, r) => sum + toAmount(r.amount), 0);
+  const productionTotal = productionRows.reduce((sum, r) => sum + budgetAmountForTotals(r, r.requestAmount), 0);
+  const nonProductionTotal = operationRows.reduce((sum, r) => sum + budgetAmountForTotals(r, r.amount), 0);
 
   return [
     { name: '生产预算', value: productionTotal },
@@ -169,7 +177,7 @@ export function buildExecutionRateData(executionRows) {
  */
 export function buildDeptApprovedComparison(executionRows) {
   return aggregateExecutionRowsByDept(executionRows)
-    .filter((row) => toAmount(row.budgetTotal) > 0)
+    .filter((row) => toAmount(row.budgetTotal) > 0 || row.sharedBudgetChild)
     .map((row) => ({
       deptName: row.deptName,
       budget: toAmount(row.budgetTotal),
@@ -196,6 +204,7 @@ export function buildRegionDistribution(productionRecords, nonProductionRecords)
   };
 
   for (const record of productionRecords) {
+    if (isSharedBudgetChild(record)) continue;
     const region = normalizeRegion(record.execution_region);
     if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
@@ -204,6 +213,7 @@ export function buildRegionDistribution(productionRecords, nonProductionRecords)
   }
 
   for (const record of nonProductionRecords) {
+    if (isSharedBudgetChild(record)) continue;
     const region = normalizeRegion(record.execution_region);
     if (!region) continue;
     const cur = regionMap.get(region) || { region, production: 0, nonProduction: 0 };
@@ -242,6 +252,7 @@ export function buildExecutionStatus(executionRows, productionRecords, nonProduc
   // 2. 从原始预算记录汇总「审批中」金额
   const addPending = (records) => {
     for (const r of records) {
+      if (isSharedBudgetChild(r)) continue;
       if (r.status === '审批中') {
         const dept = departmentDisplayName(r);
         const key = departmentIdentityKey(r);
@@ -282,8 +293,8 @@ export function buildExecutionStatus(executionRows, productionRecords, nonProduc
  * 汇总统计数据
  */
 export function buildSummaryStats(productionRows, operationRows, executionRows, approvedDetailRows) {
-  const productionTotal = productionRows.reduce((sum, r) => sum + toAmount(r.requestAmount), 0);
-  const nonProductionTotal = operationRows.reduce((sum, r) => sum + toAmount(r.amount), 0);
+  const productionTotal = productionRows.reduce((sum, r) => sum + budgetAmountForTotals(r, r.requestAmount), 0);
+  const nonProductionTotal = operationRows.reduce((sum, r) => sum + budgetAmountForTotals(r, r.amount), 0);
   const approvedTotal = executionRows.reduce((sum, r) => sum + toAmount(r.totalApproved), 0);
   const budgetSubmittedApprovedTotal = executionRows.reduce((sum, r) => sum + toAmount(r.budgetSubmittedApprovedTotal), 0);
   const remainingTotal = executionRows.reduce((sum, r) => sum + toAmount(r.remainingBudget), 0);

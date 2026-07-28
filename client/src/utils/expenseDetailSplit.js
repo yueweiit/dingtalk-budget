@@ -9,6 +9,8 @@ export function expenseDetailSplitRecord(entry = {}) {
     departmentId: firstNonEmpty(entry.department_id, entry.departmentId, entry.dept_id),
     reportingDeptId: firstNonEmpty(entry.reporting_dept_id, entry.reportingDeptId),
     reportingDeptName: firstNonEmpty(entry.reporting_dept_name, entry.reportingDeptName),
+    rollupDeptId: firstNonEmpty(entry.rollup_dept_id, entry.rollupDeptId),
+    rollupDeptName: firstNonEmpty(entry.rollup_dept_name, entry.rollupDeptName),
     reportingDepartmentIdentityKey: firstNonEmpty(
       entry.reporting_department_identity_key,
       entry.reportingDepartmentIdentityKey
