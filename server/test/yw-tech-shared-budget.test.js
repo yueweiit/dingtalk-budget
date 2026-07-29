@@ -4,12 +4,21 @@ import test from 'node:test';
 import {
   expandYWTechSharedBudgetRows,
   isYWTechSharedBudgetParent,
+  expandSharedBudgetRows,
+  isSharedBudgetParent,
+  rollupSharedBudgetApprovedExpenseSummaries,
+  rollupSharedBudgetRows,
+  sharedBudgetRollupDepartment,
   rollupYWTechApprovedExpenseSummaries,
   rollupYWTechBudgetRows,
   sharedBudgetDepartmentRecords,
   ywTechSharedBudgetRollupDepartment,
 } from '../services/yw-tech-shared-budget.js';
-import { attachExpenseAmounts } from '../routes/list.js';
+import {
+  applyExpenseDetailReportingOverlay,
+  attachExpenseAmounts,
+  summarizeApprovedDetails,
+} from '../routes/list.js';
 import {
   buildBudgetedDepartmentMonthSet,
   shouldIncludeDepartmentExpense,
@@ -22,6 +31,127 @@ const parentBudget = {
   budget_month: '2026-07',
   total_amount: 100,
 };
+
+const latinPurchaseParentBudget = {
+  form_no: 'LATIN-BUDGET-001',
+  dept_id: '1089990115',
+  dept_name: '拉丁购',
+  budget_month: '2026-07',
+  total_amount: 100,
+};
+
+test('expands a July Latin Purchase parent budget into the parent plus four shared-budget child rows', () => {
+  assert.equal(isSharedBudgetParent(latinPurchaseParentBudget), true);
+
+  const rows = expandSharedBudgetRows([latinPurchaseParentBudget]);
+  assert.deepEqual(rows.map((row) => row.dept_id), [
+    '1089990115',
+    '1089527639',
+    '1092658960',
+    '1092931411',
+    '1092985398',
+  ]);
+  assert.equal(rows[0].shared_budget_child, false);
+  assert.deepEqual(
+    rows.slice(1).map((row) => [row.shared_budget_child, row.shared_budget_parent_amount, row.budget_amount_for_totals]),
+    [
+      [true, 100, 0],
+      [true, 100, 0],
+      [true, 100, 0],
+      [true, 100, 0],
+    ]
+  );
+});
+
+test('rolls Latin Purchase parent and child expenses into its parent budget row', () => {
+  const rows = rollupSharedBudgetRows([
+    {
+      ...latinPurchaseParentBudget,
+      approved_amount: 10,
+      management_expense: 10,
+      operation_expense: 10,
+      operation_count: 1,
+    },
+    {
+      ...latinPurchaseParentBudget,
+      dept_id: '1089527639',
+      dept_name: 'CEO',
+      approved_amount: 20,
+      management_expense: 10,
+      salary_expense: 20,
+      operation_count: 1,
+    },
+    {
+      ...latinPurchaseParentBudget,
+      dept_id: '1092658960',
+      dept_name: '直播',
+      approved_amount: 30,
+      office_expense: 30,
+      operation_count: 1,
+    },
+    {
+      ...latinPurchaseParentBudget,
+      dept_id: '1092931411',
+      dept_name: '产品',
+      approved_amount: 40,
+      tax_expense: 40,
+      operation_count: 1,
+    },
+    {
+      ...latinPurchaseParentBudget,
+      dept_id: '1092985398',
+      dept_name: '运营',
+      approved_amount: 50,
+      purchase_expense: 50,
+      purchase_count: 1,
+    },
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dept_id, '1089990115');
+  assert.equal(rows[0].management_expense, 20);
+  assert.equal(rows[0].salary_expense, 20);
+  assert.equal(rows[0].office_expense, 30);
+  assert.equal(rows[0].tax_expense, 40);
+  assert.equal(rows[0].purchase_expense, 50);
+  assert.equal(rows[0].approved_amount, 110);
+  assert.deepEqual(
+    rows[0].child_expenses.map((item) => [item.department_id, item.approved_amount]),
+    [
+      ['1089527639', 20],
+      ['1092658960', 30],
+      ['1092931411', 40],
+      ['1092985398', 50],
+    ]
+  );
+});
+
+test('rolls Latin Purchase child report and detail summaries into its parent from July only', () => {
+  assert.deepEqual(
+    sharedBudgetRollupDepartment({ department_id: '1092931411' }, '2026-07'),
+    { department_id: '1089990115', department_name: '拉丁购' }
+  );
+  assert.equal(sharedBudgetRollupDepartment({ department_id: '1092931411' }, '2026-06'), null);
+});
+
+test('normalizes valid shared-budget months and rejects invalid or pre-July months', () => {
+  assert.equal(isSharedBudgetParent(latinPurchaseParentBudget), true);
+  assert.equal(isSharedBudgetParent({ ...latinPurchaseParentBudget, budget_month: '2026-7' }), true);
+  assert.equal(isSharedBudgetParent({ ...latinPurchaseParentBudget, budget_month: '2026-06' }), false);
+  assert.equal(isSharedBudgetParent({ ...latinPurchaseParentBudget, budget_month: '2026-13' }), false);
+  assert.equal(isSharedBudgetParent({ ...latinPurchaseParentBudget, budget_month: 'junk' }), false);
+  assert.equal(isSharedBudgetParent({ ...latinPurchaseParentBudget, budget_month: '' }), false);
+  assert.deepEqual(
+    sharedBudgetRollupDepartment({ department_id: '1092931411' }, '2026-7'),
+    { department_id: '1089990115', department_name: '拉丁购' }
+  );
+  assert.equal(sharedBudgetRollupDepartment({ department_id: '1092931411' }, '2026-13'), null);
+});
+
+test('keeps the legacy YW Tech APIs scoped to YW Tech rather than Latin Purchase', () => {
+  assert.equal(isYWTechSharedBudgetParent(latinPurchaseParentBudget), false);
+  assert.equal(ywTechSharedBudgetRollupDepartment({ department_id: '1092931411' }, '2026-07'), null);
+});
 
 test('expands a July YW Tech parent budget into the parent plus four shared-budget child rows', () => {
   assert.equal(isYWTechSharedBudgetParent(parentBudget), true);
@@ -107,6 +237,200 @@ test('attaches parent and child expenses to one parent budget row', async () => 
       ['1092530529', 0],
     ]
   );
+});
+
+test('attaches a China Latin Purchase product tax split to its parent budget row', async () => {
+  const rows = await attachExpenseAmounts([latinPurchaseParentBudget], {
+    approvedDetails: [{
+      business_id: 'LATIN-PRODUCT-TAX-CHINA',
+      expense_kind: 'operation',
+      query_month: '2026-07',
+      execution_region: 'China',
+      expense_splits: [{
+        business_id: 'LATIN-PRODUCT-TAX-CHINA',
+        department: 'Product',
+        department_id: '1092931411',
+        split_type: 'tax',
+        amount: 25,
+      }],
+    }],
+    budgetedDepartmentMonths: buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget]),
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dept_id, '1089990115');
+  assert.equal(rows[0].tax_expense, 25);
+  assert.equal(rows[0].approved_amount, 25);
+  assert.equal(
+    rows[0].child_expenses.find((item) => item.department_id === '1092931411').approved_amount,
+    25
+  );
+});
+
+test('excludes a Mexico Latin Purchase product tax split when the budget is submitted', async () => {
+  const rows = await attachExpenseAmounts([latinPurchaseParentBudget], {
+    approvedDetails: [{
+      business_id: 'LATIN-PRODUCT-TAX-MEXICO',
+      expense_kind: 'operation',
+      query_month: '2026-07',
+      execution_region: 'Mexico',
+      expense_splits: [{
+        business_id: 'LATIN-PRODUCT-TAX-MEXICO',
+        department: 'Product',
+        department_id: '1092931411',
+        split_type: 'tax',
+        amount: 25,
+      }],
+    }],
+    budgetedDepartmentMonths: buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget]),
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].approved_amount, 0);
+  assert.equal(rows[0].tax_expense, 0);
+  assert.equal(
+    rows[0].child_expenses.find((item) => item.department_id === '1092931411').approved_amount,
+    0
+  );
+});
+
+test('excludes a submitted Latin Purchase product tax split in Mexico from approved summaries', () => {
+  const rows = rollupSharedBudgetApprovedExpenseSummaries(summarizeApprovedDetails([{
+    business_id: 'LATIN-PRODUCT-TAX-SUMMARY-MEXICO',
+    expense_kind: 'operation',
+    query_month: '2026-07',
+    execution_region: 'Mexico',
+    base_currency_amount: 30,
+    expense_splits: [{
+      business_id: 'LATIN-PRODUCT-TAX-SUMMARY-MEXICO',
+      department: '产品',
+      department_id: '1092931411',
+      split_type: 'tax',
+      amount: 25,
+    }],
+  }], buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget])));
+
+  assert.deepEqual(rows, []);
+});
+
+test('includes a submitted Latin Purchase product tax split in China in approved summaries', () => {
+  const rows = rollupSharedBudgetApprovedExpenseSummaries(summarizeApprovedDetails([{
+    business_id: 'LATIN-PRODUCT-TAX-SUMMARY-CHINA',
+    expense_kind: 'operation',
+    query_month: '2026-07',
+    execution_region: 'China',
+    base_currency_amount: 25,
+    expense_splits: [{
+      business_id: 'LATIN-PRODUCT-TAX-SUMMARY-CHINA',
+      department: '产品',
+      department_id: '1092931411',
+      split_type: 'tax',
+      amount: 25,
+    }],
+  }], buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget])));
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].department_id, '1089990115');
+  assert.equal(rows[0].taxTotal, 25);
+  assert.equal(rows[0].operationCount, 1);
+});
+
+test('counts each operation or purchase form once on the Latin Purchase parent row', async () => {
+  const rows = await attachExpenseAmounts([latinPurchaseParentBudget], {
+    approvedDetails: [
+      {
+        business_id: 'LATIN-PRODUCT-OPERATION',
+        expense_kind: 'operation',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [{
+          business_id: 'LATIN-PRODUCT-OPERATION',
+          department: '产品',
+          department_id: '1092931411',
+          split_type: 'operation',
+          amount: 20,
+        }],
+      },
+      {
+        business_id: 'LATIN-PRODUCT-PURCHASE',
+        expense_kind: 'purchase',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [{
+          business_id: 'LATIN-PRODUCT-PURCHASE',
+          department: '产品',
+          department_id: '1092931411',
+          split_type: 'purchase',
+          amount: 30,
+        }],
+      },
+      {
+        business_id: 'LATIN-PRODUCT-SALARY',
+        expense_kind: 'operation',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [{
+          business_id: 'LATIN-PRODUCT-SALARY',
+          department: '产品',
+          department_id: '1092931411',
+          split_type: 'salary',
+          amount: 5,
+        }],
+      },
+      {
+        business_id: 'LATIN-PRODUCT-OFFICE',
+        expense_kind: 'operation',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [{
+          business_id: 'LATIN-PRODUCT-OFFICE',
+          department: '产品',
+          department_id: '1092931411',
+          split_type: 'office',
+          amount: 6,
+        }],
+      },
+      {
+        business_id: 'LATIN-PRODUCT-TAX',
+        expense_kind: 'operation',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [{
+          business_id: 'LATIN-PRODUCT-TAX',
+          department: '产品',
+          department_id: '1092931411',
+          split_type: 'tax',
+          amount: 7,
+        }],
+      },
+    ],
+    budgetedDepartmentMonths: buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget]),
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].operation_count, 4);
+  assert.equal(rows[0].purchase_count, 1);
+});
+
+test('applies Latin Purchase rollup departments to product expense details and splits', () => {
+  const [detail] = applyExpenseDetailReportingOverlay([{
+    business_id: 'LATIN-PRODUCT-DETAIL',
+    query_month: '2026-07',
+    applicant_department: 'Product',
+    applicant_department_id: '1092931411',
+    expense_splits: [{
+      business_id: 'LATIN-PRODUCT-DETAIL',
+      department: 'Product',
+      department_id: '1092931411',
+      split_type: 'tax',
+      amount: 25,
+    }],
+  }]);
+
+  assert.equal(detail.rollup_dept_id, '1089990115');
+  assert.equal(detail.rollup_dept_name, '拉丁购');
+  assert.equal(detail.expense_splits[0].rollup_dept_id, '1089990115');
+  assert.equal(detail.expense_splits[0].rollup_dept_name, '拉丁购');
 });
 
 test('rolls July child expenses into one YW Tech parent budget row', () => {
@@ -227,4 +551,107 @@ test('marks only July YW Tech parent and known children with the parent rollup d
   );
   assert.equal(ywTechSharedBudgetRollupDepartment({ department_id: '1092483668' }, '2026-06'), null);
   assert.equal(ywTechSharedBudgetRollupDepartment({ department_id: 'unknown' }, '2026-07'), null);
+});
+
+test('keeps an operation split remainder on the applicant department budget row', async () => {
+  const rows = await attachExpenseAmounts([latinPurchaseParentBudget], {
+    approvedDetails: [{
+      business_id: 'LATIN-PARTIAL-SPLIT',
+      expense_kind: 'operation',
+      query_month: '2026-07',
+      execution_region: 'China',
+      applicant_department: 'Product',
+      applicant_department_id: '1092931411',
+      base_currency_amount: 30,
+      expense_splits: [{
+        business_id: 'LATIN-PARTIAL-SPLIT',
+        department: 'Product',
+        department_id: '1092931411',
+        split_type: 'management',
+        amount: 25,
+      }],
+    }],
+    budgetedDepartmentMonths: buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget]),
+  });
+
+  assert.equal(rows[0].management_expense, 30);
+  assert.equal(rows[0].approved_amount, 30);
+  assert.equal(rows[0].operation_count, 1);
+  assert.equal(
+    rows[0].child_expenses.find((item) => item.department_id === '1092931411').approved_amount,
+    30
+  );
+});
+
+test('uses purchase split departments for the China-region budget filter and rollup', () => {
+  const rows = rollupSharedBudgetApprovedExpenseSummaries(summarizeApprovedDetails([{
+    business_id: 'LATIN-PURCHASE-SPLIT-CHINA',
+    expense_kind: 'purchase',
+    query_month: '2026-07',
+    execution_region: 'China',
+    applicant_department: 'Other',
+    applicant_department_id: 'other-department',
+    base_currency_amount: 30,
+    expense_splits: [{
+      business_id: 'LATIN-PURCHASE-SPLIT-CHINA',
+      department: 'Product',
+      department_id: '1092931411',
+      split_type: 'purchase',
+      amount: 30,
+    }],
+  }], buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget])));
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].department_id, '1089990115');
+  assert.equal(rows[0].month, '2026-07');
+  assert.equal(rows[0].purchaseTotal, 30);
+  assert.equal(rows[0].managementTotal, 30);
+  assert.equal(rows[0].purchaseCount, 1);
+});
+
+test('classifies purchase splits and counts one operation form per department', async () => {
+  const rows = await attachExpenseAmounts([latinPurchaseParentBudget], {
+    approvedDetails: [
+      {
+        business_id: 'LATIN-PURCHASE-CLASSIFICATION',
+        expense_kind: 'purchase',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [{
+          business_id: 'LATIN-PURCHASE-CLASSIFICATION',
+          department: 'Product',
+          department_id: '1092931411',
+          split_type: 'purchase',
+          amount: 30,
+        }],
+      },
+      {
+        business_id: 'LATIN-DUPLICATE-OPERATION',
+        expense_kind: 'operation',
+        query_month: '2026-07',
+        execution_region: 'China',
+        expense_splits: [
+          {
+            business_id: 'LATIN-DUPLICATE-OPERATION',
+            department: 'Product',
+            department_id: '1092931411',
+            split_type: 'management',
+            amount: 10,
+          },
+          {
+            business_id: 'LATIN-DUPLICATE-OPERATION',
+            department: 'Product',
+            department_id: '1092931411',
+            split_type: 'management',
+            amount: 20,
+          },
+        ],
+      },
+    ],
+    budgetedDepartmentMonths: buildBudgetedDepartmentMonthSet([latinPurchaseParentBudget]),
+  });
+
+  assert.equal(rows[0].purchase_expense, 30);
+  assert.equal(rows[0].purchase_count, 1);
+  assert.equal(rows[0].operation_count, 1);
 });

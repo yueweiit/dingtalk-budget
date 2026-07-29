@@ -1,18 +1,46 @@
-const PARENT_DEPARTMENT = {
-  id: '1077343081',
-  name: '悦为智能 YW Tech_Ai',
+const YW_TECH_SHARED_BUDGET = {
+  parent: {
+    id: '1077343081',
+    name: '悦为智能 YW Tech_Ai',
+  },
+  children: [
+    { id: '1090021489', name: 'CEO' },
+    { id: '1092411969', name: '业务' },
+    { id: '1092483668', name: '开发' },
+    { id: '1092530529', name: '运营' },
+  ],
 };
 
-const CHILD_DEPARTMENTS = [
-  { id: '1090021489', name: 'CEO' },
-  { id: '1092411969', name: '业务' },
-  { id: '1092483668', name: '开发' },
-  { id: '1092530529', name: '运营' },
+const LATIN_PURCHASE_SHARED_BUDGET = {
+  parent: {
+    id: '1089990115',
+    name: '拉丁购',
+  },
+  children: [
+    { id: '1089527639', name: 'CEO' },
+    { id: '1092658960', name: '直播' },
+    { id: '1092931411', name: '产品' },
+    { id: '1092985398', name: '运营' },
+  ],
+};
+
+const SHARED_BUDGET_CONFIGS = [
+  YW_TECH_SHARED_BUDGET,
+  LATIN_PURCHASE_SHARED_BUDGET,
 ];
 
 const compact = (value) => String(value || '').trim();
 
-const budgetMonthOf = (record = {}) => compact(record.budget_month || record.declaration_month);
+const normalizeBudgetMonth = (value) => {
+  const match = compact(value).match(/^(\d{4})-(\d{1,2})$/);
+  if (!match) return '';
+
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return '';
+  return `${match[1]}-${String(month).padStart(2, '0')}`;
+};
+
+const budgetMonthOf = (record = {}) => normalizeBudgetMonth(record.budget_month || record.declaration_month);
 
 const budgetAmountOf = (record = {}) => {
   const values = [record.total_amount, record.budget_amount, record.monthly_budget_amount]
@@ -53,25 +81,38 @@ const rounded = (value) => Number(numberValue(value).toFixed(2));
 
 const departmentIdOf = (record = {}) => compact(record.dept_id || record.department_id);
 
-const isSharedBudgetDepartment = (record = {}) => (
-  budgetMonthOf(record) >= '2026-07'
-  && [PARENT_DEPARTMENT.id, ...CHILD_DEPARTMENTS.map((child) => child.id)].includes(departmentIdOf(record))
-);
+const sharedBudgetConfigForDepartment = (
+  record = {},
+  month = budgetMonthOf(record),
+  configs = SHARED_BUDGET_CONFIGS
+) => {
+  const normalizedMonth = normalizeBudgetMonth(month);
+  if (normalizedMonth < '2026-07') return null;
 
-export function isYWTechSharedBudgetParent(record = {}) {
-  return budgetMonthOf(record) >= '2026-07' && compact(record.dept_id || record.department_id) === PARENT_DEPARTMENT.id;
+  const departmentId = departmentIdOf(record);
+  const applicableConfigs = Array.isArray(configs) ? configs : SHARED_BUDGET_CONFIGS;
+  return applicableConfigs.find((config) => (
+    [config.parent.id, ...config.children.map((child) => child.id)].includes(departmentId)
+  )) || null;
+};
+
+export function isSharedBudgetParent(record = {}, configs = SHARED_BUDGET_CONFIGS) {
+  const config = sharedBudgetConfigForDepartment(record, budgetMonthOf(record), configs);
+  return config?.parent.id === departmentIdOf(record);
 }
 
-export function sharedBudgetDepartmentRecords(record = {}) {
-  if (!isYWTechSharedBudgetParent(record)) return [record];
+export function sharedBudgetDepartmentRecords(record = {}, configs = SHARED_BUDGET_CONFIGS) {
+  const config = isSharedBudgetParent(record, configs)
+    && sharedBudgetConfigForDepartment(record, budgetMonthOf(record), configs);
+  if (!config) return [record];
 
   return [
     record,
-    ...CHILD_DEPARTMENTS.map((child) => ({
+    ...config.children.map((child) => ({
       ...record,
       dept_id: child.id,
       dept_name: child.name,
-      department_display: PARENT_DEPARTMENT.name,
+      department_display: config.parent.name,
       sub_department_display: child.name,
       department_identity_key: `id:${child.id}`,
       reporting_dept_id: child.id,
@@ -81,12 +122,12 @@ export function sharedBudgetDepartmentRecords(record = {}) {
   ];
 }
 
-export function expandYWTechSharedBudgetRows(records = []) {
+export function expandSharedBudgetRows(records = [], configs = SHARED_BUDGET_CONFIGS) {
   return records.flatMap((record) => {
-    if (!isYWTechSharedBudgetParent(record)) return [{ ...record, shared_budget_child: false }];
+    if (!isSharedBudgetParent(record, configs)) return [{ ...record, shared_budget_child: false }];
 
     const sharedBudgetParentAmount = budgetAmountOf(record);
-    const [parent, ...children] = sharedBudgetDepartmentRecords(record);
+    const [parent, ...children] = sharedBudgetDepartmentRecords(record, configs);
     return [
       {
         ...parent,
@@ -103,20 +144,21 @@ export function expandYWTechSharedBudgetRows(records = []) {
   });
 }
 
-export function rollupYWTechBudgetRows(records = []) {
+export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CONFIGS) {
   const unchanged = [];
   const groups = new Map();
 
   for (const record of records) {
-    if (!isSharedBudgetDepartment(record)) {
+    const config = sharedBudgetConfigForDepartment(record, budgetMonthOf(record), configs);
+    if (!config) {
       unchanged.push(record);
       continue;
     }
 
-    const key = `${compact(record.form_no || record.formNo)}__${budgetMonthOf(record)}`;
-    const group = groups.get(key) || { rows: [], parent: null };
+    const key = `${config.parent.id}__${compact(record.form_no || record.formNo)}__${budgetMonthOf(record)}`;
+    const group = groups.get(key) || { config, rows: [], parent: null };
     group.rows.push(record);
-    if (departmentIdOf(record) === PARENT_DEPARTMENT.id) group.parent = record;
+    if (departmentIdOf(record) === config.parent.id) group.parent = record;
     groups.set(key, group);
   }
 
@@ -127,8 +169,9 @@ export function rollupYWTechBudgetRows(records = []) {
       continue;
     }
 
+    const { config } = group;
     const totals = Object.fromEntries(expenseFields.map((field) => [field, numberValue(group.parent[field])]));
-    const childExpenses = new Map(CHILD_DEPARTMENTS.map((child) => [child.id, {
+    const childExpenses = new Map(config.children.map((child) => [child.id, {
       department_id: child.id,
       department_name: child.name,
       approved_amount: 0,
@@ -136,7 +179,7 @@ export function rollupYWTechBudgetRows(records = []) {
 
     for (const record of group.rows) {
       const departmentId = departmentIdOf(record);
-      if (departmentId === PARENT_DEPARTMENT.id || record.excluded_from_expense) continue;
+      if (departmentId === config.parent.id || record.excluded_from_expense) continue;
 
       const childExpense = childExpenses.get(departmentId);
       if (!childExpense) continue;
@@ -156,7 +199,7 @@ export function rollupYWTechBudgetRows(records = []) {
       ...group.parent,
       shared_budget_child: false,
       shared_budget_parent_amount: budgetAmountOf(group.parent),
-      department_display: PARENT_DEPARTMENT.name,
+      department_display: config.parent.name,
       sub_department_display: '',
       management_expense: managementExpense,
       operation_expense: operationExpense,
@@ -176,30 +219,31 @@ export function rollupYWTechBudgetRows(records = []) {
         tax: taxExpense,
         total: approvedAmount,
       },
-      child_expenses: CHILD_DEPARTMENTS.map((child) => childExpenses.get(child.id)),
+      child_expenses: config.children.map((child) => childExpenses.get(child.id)),
     });
   }
 
   return [...unchanged, ...rolledUp];
 }
 
-export function rollupYWTechApprovedExpenseSummaries(items = []) {
+export function rollupSharedBudgetApprovedExpenseSummaries(items = [], configs = SHARED_BUDGET_CONFIGS) {
   const unchanged = [];
   const grouped = new Map();
 
   for (const item of items) {
-    const month = compact(item.month);
-    if (month < '2026-07' || ![PARENT_DEPARTMENT.id, ...CHILD_DEPARTMENTS.map((child) => child.id)].includes(departmentIdOf(item))) {
+    const month = normalizeBudgetMonth(item.month);
+    const config = sharedBudgetConfigForDepartment(item, month, configs);
+    if (!config) {
       unchanged.push(item);
       continue;
     }
 
-    const key = `${PARENT_DEPARTMENT.id}__${month}`;
+    const key = `${config.parent.id}__${month}`;
     const current = grouped.get(key) || {
-      department: PARENT_DEPARTMENT.name,
-      department_id: PARENT_DEPARTMENT.id,
-      department_identity_key: `id:${PARENT_DEPARTMENT.id}`,
-      department_display: PARENT_DEPARTMENT.name,
+      department: config.parent.name,
+      department_id: config.parent.id,
+      department_identity_key: `id:${config.parent.id}`,
+      department_display: config.parent.name,
       sub_department_display: '',
       month,
       ...Object.fromEntries(approvedSummaryFields.map((field) => [field, 0])),
@@ -214,17 +258,34 @@ export function rollupYWTechApprovedExpenseSummaries(items = []) {
   }))];
 }
 
-export function ywTechSharedBudgetRollupDepartment(record = {}, month = '') {
-  if (compact(month) < '2026-07' || ![PARENT_DEPARTMENT.id, ...CHILD_DEPARTMENTS.map((child) => child.id)].includes(departmentIdOf(record))) {
-    return null;
-  }
+export function sharedBudgetRollupDepartment(record = {}, month = '', configs = SHARED_BUDGET_CONFIGS) {
+  const config = sharedBudgetConfigForDepartment(record, month, configs);
+  if (!config) return null;
+
   return {
-    department_id: PARENT_DEPARTMENT.id,
-    department_name: PARENT_DEPARTMENT.name,
+    department_id: config.parent.id,
+    department_name: config.parent.name,
   };
 }
 
-export const YW_TECH_SHARED_BUDGET = {
-  parent: PARENT_DEPARTMENT,
-  children: CHILD_DEPARTMENTS,
-};
+export function isYWTechSharedBudgetParent(record = {}) {
+  return isSharedBudgetParent(record, [YW_TECH_SHARED_BUDGET]);
+}
+
+export function expandYWTechSharedBudgetRows(records = []) {
+  return expandSharedBudgetRows(records, [YW_TECH_SHARED_BUDGET]);
+}
+
+export function rollupYWTechBudgetRows(records = []) {
+  return rollupSharedBudgetRows(records, [YW_TECH_SHARED_BUDGET]);
+}
+
+export function rollupYWTechApprovedExpenseSummaries(items = []) {
+  return rollupSharedBudgetApprovedExpenseSummaries(items, [YW_TECH_SHARED_BUDGET]);
+}
+
+export function ywTechSharedBudgetRollupDepartment(record = {}, month = '') {
+  return sharedBudgetRollupDepartment(record, month, [YW_TECH_SHARED_BUDGET]);
+}
+
+export { YW_TECH_SHARED_BUDGET, LATIN_PURCHASE_SHARED_BUDGET };

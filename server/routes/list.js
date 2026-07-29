@@ -11,10 +11,10 @@ import {
   usesNewDepartmentIdentity,
 } from '../services/july-department-reporting-overlay.js';
 import {
-  rollupYWTechBudgetRows,
-  rollupYWTechApprovedExpenseSummaries,
+  rollupSharedBudgetRows,
+  rollupSharedBudgetApprovedExpenseSummaries,
   sharedBudgetDepartmentRecords,
-  ywTechSharedBudgetRollupDepartment,
+  sharedBudgetRollupDepartment,
 } from '../services/yw-tech-shared-budget.js';
 import { assertValidTable } from '../utils/db.js';
 
@@ -348,22 +348,56 @@ function isHrUnifiedExpense(item) {
 
 function splitExpenseCategory(splitType) {
   const type = String(splitType || '').trim().toLowerCase();
+  if (type === 'operation') return 'operation';
+  if (type === 'purchase') return 'purchase';
   if (type === 'salary' || type === 'social_insurance') return 'salary';
   if (type === 'office' || type === 'office_space') return 'office';
   if (type === 'individual_income_tax' || type === 'tax') return 'tax';
   return 'management';
 }
 
-function addDirectExpense(map, department, month, item, amount, budgetedDepartmentMonths) {
+function expenseCountValues(item, businessId, department, month, countedExpenseDepartments) {
+  const departmentKey = reportingDepartmentKey(department, month);
+  if (!departmentKey) return {};
+
+  const expenseKind = item?.expense_kind === 'purchase' ? 'purchase' : 'operation';
+  if (businessId) {
+    const key = `${expenseKind}__${businessId}__${departmentKey}__${month}`;
+    if (countedExpenseDepartments.has(key)) return {};
+    countedExpenseDepartments.add(key);
+  }
+
+  return expenseKind === 'purchase' ? { purchase_count: 1 } : { operation_count: 1 };
+}
+
+function addDirectExpense(
+  map,
+  department,
+  month,
+  item,
+  amount,
+  budgetedDepartmentMonths,
+  countedExpenseDepartments,
+  businessId = ''
+) {
   const value = numberValue(amount);
   if (value <= 0 || !shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) return;
+  const countValues = expenseCountValues(item, businessId, department, month, countedExpenseDepartments);
   if (item?.expense_kind === 'purchase') {
-    addExpenseBreakdown(map, department, month, { purchase: value, management: value });
+    addExpenseBreakdown(map, department, month, {
+      purchase: value,
+      management: value,
+      ...countValues,
+    });
     return;
   }
   // 工资/公积金与办公场地只认 approval_expense_dept_split.split_type。
   // 没有拆分表明细的运营支出，按管理支出归属申请部门。
-  addExpenseBreakdown(map, department, month, { operation: value, management: value });
+  addExpenseBreakdown(map, department, month, {
+    operation: value,
+    management: value,
+    ...countValues,
+  });
 }
 
 function addExpenseBreakdown(map, department, month, values = {}) {
@@ -377,6 +411,8 @@ function addExpenseBreakdown(map, department, month, values = {}) {
     office: 0,
     tax: 0,
     management: 0,
+    operation_count: 0,
+    purchase_count: 0,
   };
   current.operation += numberValue(values.operation);
   current.purchase += numberValue(values.purchase);
@@ -384,6 +420,8 @@ function addExpenseBreakdown(map, department, month, values = {}) {
   current.office += numberValue(values.office);
   current.tax += numberValue(values.tax);
   current.management += numberValue(values.management);
+  current.operation_count += numberValue(values.operation_count);
+  current.purchase_count += numberValue(values.purchase_count);
   map.set(key, current);
 }
 
@@ -548,6 +586,8 @@ async function attachExpenseAmounts(records, {
     ? embeddedExpenseSplitRows(details)
     : await fetchExpenseDeptSplits(details);
   const splitBusinessIds = new Set(splitRows.map((row) => String(row.business_id || '').trim()).filter(Boolean));
+  const splitTotalsByBusinessId = new Map();
+  const countedExpenseDepartments = new Set();
   const detailMonthMap = new Map();
   const detailByBusinessId = new Map();
   for (const item of details) {
@@ -563,11 +603,17 @@ async function attachExpenseAmounts(records, {
     const month = detailMonthMap.get(businessId);
     if (!month) continue;
     const item = detailByBusinessId.get(businessId);
+    const splitAmount = numberValue(row.amount);
+    splitTotalsByBusinessId.set(
+      businessId,
+      numberValue(splitTotalsByBusinessId.get(businessId)) + splitAmount
+    );
     const department = splitDepartmentRecord(row, businessId);
     if (!shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) continue;
     const category = splitExpenseCategory(row.split_type);
     addExpenseBreakdown(expenseMap, department, month, {
-      [category]: numberValue(row.amount),
+      [category]: splitAmount,
+      ...expenseCountValues(item, businessId, department, month, countedExpenseDepartments),
     });
   }
 
@@ -576,8 +622,21 @@ async function attachExpenseAmounts(records, {
     const amount = numberValue(firstNonEmpty(item.base_currency_amount, item.amount, item.detail_summary_amount));
     if (!month || amount <= 0) continue;
     const businessId = String(item.business_id || '').trim();
-    if (businessId && splitBusinessIds.has(businessId)) continue;
-    addDirectExpense(expenseMap, expenseDepartmentRecord(item), month, item, amount, budgetedDepartmentMonths);
+    const splitTotal = numberValue(splitTotalsByBusinessId.get(businessId));
+    const directAmount = businessId && splitBusinessIds.has(businessId)
+      ? Number((amount - splitTotal).toFixed(2))
+      : amount;
+    if (directAmount <= 0.01) continue;
+    addDirectExpense(
+      expenseMap,
+      expenseDepartmentRecord(item),
+      month,
+      item,
+      directAmount,
+      budgetedDepartmentMonths,
+      countedExpenseDepartments,
+      businessId
+    );
   }
 
   const rowsWithExpense = prepared.flatMap(sharedBudgetDepartmentRecords).map((row) => {
@@ -589,6 +648,8 @@ async function attachExpenseAmounts(records, {
       office: 0,
       tax: 0,
       management: 0,
+      operation_count: 0,
+      purchase_count: 0,
     };
     const managementExpense = direct.management || direct.operation + direct.purchase;
     const managementRounded = Number(managementExpense.toFixed(2));
@@ -608,6 +669,8 @@ async function attachExpenseAmounts(records, {
       office_expense: officeRounded,
       tax_expense: taxRounded,
       approved_amount: totalRounded,
+      operation_count: direct.operation_count,
+      purchase_count: direct.purchase_count,
       expense_breakdown: {
         management: managementRounded,
         operation: operationRounded,
@@ -620,7 +683,7 @@ async function attachExpenseAmounts(records, {
     };
   });
 
-  return rollupYWTechBudgetRows(rowsWithExpense);
+  return rollupSharedBudgetRows(rowsWithExpense);
 }
 
 function approvedDetailMonth(item) {
@@ -930,11 +993,11 @@ function applyExpenseDetailReportingOverlay(details) {
   return (details || []).map((item) => {
     const month = item.query_month || approvedDetailMonth(item);
     const reporting = applyJulyDepartmentReportingOverlay(expenseDepartmentRecord(item), month);
-    const rollupDepartment = ywTechSharedBudgetRollupDepartment(expenseDepartmentRecord(item), month);
+    const rollupDepartment = sharedBudgetRollupDepartment(expenseDepartmentRecord(item), month);
     const splits = Array.isArray(item?.expense_splits)
       ? item.expense_splits.map((entry) => {
         const department = splitDepartmentRecord(entry, item.business_id);
-        const splitRollupDepartment = ywTechSharedBudgetRollupDepartment(department, month);
+        const splitRollupDepartment = sharedBudgetRollupDepartment(department, month);
         return {
           ...entry,
           ...applyJulyDepartmentReportingOverlay(department, month),
@@ -1007,11 +1070,11 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
     const amount = numberValue(firstNonEmpty(item.base_currency_amount, item.amount, item.detail_summary_amount));
     if (amount <= 0) continue;
 
-    const directDepartment = expenseDepartment(item);
     const directDepartmentRecord = expenseDepartmentRecord(item);
+    const splits = splitRowsOf(item);
 
-    if (item.expense_kind === 'purchase') {
-      if (!shouldIncludeDepartmentExpense(directDepartment, month, item.execution_region, budgetedDepartmentMonths)) continue;
+    if (splits.length === 0 && item.expense_kind === 'purchase') {
+      if (!shouldIncludeDepartmentExpense(directDepartmentRecord, month, item.execution_region, budgetedDepartmentMonths)) continue;
       addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
         purchaseTotal: amount,
         managementTotal: amount,
@@ -1020,9 +1083,8 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
       continue;
     }
 
-    const splits = splitRowsOf(item);
     if (splits.length === 0) {
-      if (!shouldIncludeDepartmentExpense(directDepartment, month, item.execution_region, budgetedDepartmentMonths)) continue;
+      if (!shouldIncludeDepartmentExpense(directDepartmentRecord, month, item.execution_region, budgetedDepartmentMonths)) continue;
       addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
         operationTotal: amount,
         managementTotal: amount,
@@ -1035,31 +1097,38 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
     let classifiedSplitTotal = 0;
     for (const entry of splits) {
       classifiedSplitTotal += entry.amount;
-      if (!shouldIncludeDepartmentExpense(entry.department, month, item.execution_region, budgetedDepartmentMonths)) continue;
-      const category = splitExpenseCategory(entry.category);
-      const values = { operationTotal: entry.amount };
-      if (category === 'salary') values.salaryTotal = entry.amount;
-      else if (category === 'office') values.officeTotal = entry.amount;
-      else if (category === 'tax') values.taxTotal = entry.amount;
-      else values.managementTotal = entry.amount;
-
       const departmentRecord = splitDepartmentRecord(entry, item.business_id);
+      if (!shouldIncludeDepartmentExpense(departmentRecord, month, item.execution_region, budgetedDepartmentMonths)) continue;
+      const category = splitExpenseCategory(entry.category);
+      const values = {};
+      if (item.expense_kind === 'purchase' || category === 'purchase') {
+        values.purchaseTotal = entry.amount;
+        values.managementTotal = entry.amount;
+      } else {
+        values.operationTotal = entry.amount;
+        if (category === 'salary') values.salaryTotal = entry.amount;
+        else if (category === 'office') values.officeTotal = entry.amount;
+        else if (category === 'tax') values.taxTotal = entry.amount;
+        else values.managementTotal = entry.amount;
+      }
+
       touchedDepartments.add(addApprovedExpenseGroup(grouped, departmentRecord, month, values));
     }
 
     const remainder = Number((amount - classifiedSplitTotal).toFixed(2));
     if (remainder > 0.01 && shouldIncludeDepartmentExpense(
-      directDepartment, month, item.execution_region, budgetedDepartmentMonths
+      directDepartmentRecord, month, item.execution_region, budgetedDepartmentMonths
     )) {
-      touchedDepartments.add(addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
-        operationTotal: remainder,
-        managementTotal: remainder,
-      }));
+      const values = item.expense_kind === 'purchase'
+        ? { purchaseTotal: remainder, managementTotal: remainder }
+        : { operationTotal: remainder, managementTotal: remainder };
+      touchedDepartments.add(addApprovedExpenseGroup(grouped, directDepartmentRecord, month, values));
     }
 
     for (const deptKey of touchedDepartments) {
       const current = grouped.get(`${deptKey}__${month}`);
-      if (current) current.operationCount += 1;
+      if (current && item.expense_kind === 'purchase') current.purchaseCount += 1;
+      else if (current) current.operationCount += 1;
     }
   }
 
@@ -1661,7 +1730,7 @@ router.get('/report', async (req, res) => {
     const shouldIncludeApproved = String(includeApproved || '') === '1';
     if (shouldIncludeApproved) {
       const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
-      approvedItems = rollupYWTechApprovedExpenseSummaries(
+      approvedItems = rollupSharedBudgetApprovedExpenseSummaries(
         summarizeApprovedDetails(approved.details, budgetedDepartmentMonths)
       );
       approvedDetails = approved.details;
