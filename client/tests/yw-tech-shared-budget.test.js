@@ -40,7 +40,7 @@ test('uses one YW Tech parent row for execution totals and charts', () => {
   ]);
 });
 
-test('keeps the actual child department and exports its YW Tech rollup department', () => {
+test('exports a shared-budget child detail under the YW Tech parent department', () => {
   const [row] = buildApprovedDetailRows([{
     business_id: 'YW-DETAIL-001',
     expense_kind: 'operation',
@@ -50,10 +50,13 @@ test('keeps the actual child department and exports its YW Tech rollup departmen
       department_id: '1092483668',
       amount: 30,
       split_type: 'office_space',
+      rollup_dept_id: '1077343081',
       rollup_dept_name: '悦为智能 YW Tech_Ai',
     }],
   }]);
 
-  assert.equal(row.department, '开发');
+  assert.equal(row.department, '悦为智能 YW Tech_Ai');
+  assert.equal(row.departmentId, '1077343081');
+  assert.equal(row.departmentIdentityKey, 'id:1077343081');
   assert.equal(row.rollupDepartment, '悦为智能 YW Tech_Ai');
 });

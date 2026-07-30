@@ -629,14 +629,16 @@ const extractExpenseDeptSplits = (item) => {
       const dept = String(entry.department || '').trim();
       const amt = toAmount(entry.amount);
       if (dept && amt > 0) {
+        const rollupDepartment = firstValue(entry, ['rollup_dept_name', 'rollupDeptName']);
+        const rollupDepartmentId = firstValue(entry, ['rollup_dept_id', 'rollupDeptId']);
         entries.push({
-          department: departmentDisplayName(entry),
-          departmentId: firstValue(entry, ['reporting_dept_id', 'reportingDeptId', 'department_id', 'departmentId']),
-          departmentIdentityKey: departmentIdentityKey(entry),
+          department: rollupDepartment || departmentDisplayName(entry),
+          departmentId: firstValue(entry, ['reporting_dept_id', 'reportingDeptId', 'rollup_dept_id', 'rollupDeptId', 'department_id', 'departmentId']),
+          departmentIdentityKey: rollupDepartmentId ? `id:${rollupDepartmentId}` : departmentIdentityKey(entry),
           amount: amt,
           splitType: entry.split_type || entry.splitType || '',
           note: entry.note || '',
-          rollupDepartment: firstValue(entry, ['rollup_dept_name', 'rollupDeptName']),
+          rollupDepartment,
         });
       }
     }
@@ -657,14 +659,16 @@ const extractExpenseDeptSplits = (item) => {
       const dept = String(entry.department || '').trim();
       const amt = toAmount(entry.amount);
       if (dept && amt > 0) {
+        const rollupDepartment = firstValue(entry, ['rollup_dept_name', 'rollupDeptName']);
+        const rollupDepartmentId = firstValue(entry, ['rollup_dept_id', 'rollupDeptId']);
         entries.push({
-          department: departmentDisplayName(entry),
-          departmentId: firstValue(entry, ['reporting_dept_id', 'reportingDeptId', 'department_id', 'departmentId']),
-          departmentIdentityKey: departmentIdentityKey(entry),
+          department: rollupDepartment || departmentDisplayName(entry),
+          departmentId: firstValue(entry, ['reporting_dept_id', 'reportingDeptId', 'rollup_dept_id', 'rollupDeptId', 'department_id', 'departmentId']),
+          departmentIdentityKey: rollupDepartmentId ? `id:${rollupDepartmentId}` : departmentIdentityKey(entry),
           amount: amt,
           splitType,
           note: entry.note || '',
-          rollupDepartment: firstValue(entry, ['rollup_dept_name', 'rollupDeptName']),
+          rollupDepartment,
         });
       }
     }
@@ -682,18 +686,24 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
 
       if (splits.length === 0) {
         // 无拆分：保持原有的单行
-        const department = departmentDisplayName(item);
+        const rollupDepartment = firstValue(item, ['rollup_dept_name', 'rollupDeptName']);
+        const rollupDepartmentId = firstValue(item, ['rollup_dept_id', 'rollupDeptId']);
+        const department = rollupDepartment || departmentDisplayName(item);
         return [{
           expenseKind: expenseKindLabel(item.expense_kind),
           department,
           departmentId: firstValue(item, [
             'reporting_dept_id',
             'reportingDeptId',
+            'rollup_dept_id',
+            'rollupDeptId',
             'applicant_department_id',
             'department_id',
             'creator_department_id',
           ], ''),
-          departmentIdentityKey: departmentIdentityKey({ ...item, deptName: department, businessId: item.business_id }),
+          departmentIdentityKey: rollupDepartmentId
+            ? `id:${rollupDepartmentId}`
+            : departmentIdentityKey({ ...item, deptName: department, businessId: item.business_id }),
           month,
           businessId: item.business_id,
           title: item.title,

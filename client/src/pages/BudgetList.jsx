@@ -543,10 +543,6 @@ function splitExpenseDetailRow(item, split) {
 }
 
 function matchesExpenseDetailDepartment(targetDepartment, candidate) {
-  if (targetDepartment?.shared_budget_child_detail) {
-    return departmentMatches(targetDepartment, candidate, { preferLocalDepartmentId: true });
-  }
-
   return departmentMatches(targetDepartment, candidate, {
     includeRollupDepartment: Array.isArray(targetDepartment?.child_expenses),
   });
@@ -796,7 +792,6 @@ export default function BudgetList({ onGoToVisual }) {
   const [detailExpense, setDetailExpense] = useState(null);
   const [detailExpenseRaw, setDetailExpenseRaw] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [expandedDepartmentRows, setExpandedDepartmentRows] = useState(() => new Set());
   const chartRef = useRef(null);
 
   const activeTitle = useMemo(
@@ -856,15 +851,6 @@ export default function BudgetList({ onGoToVisual }) {
     }
   };
 
-  const toggleDepartmentRow = (rowKey) => {
-    setExpandedDepartmentRows((current) => {
-      const next = new Set(current);
-      if (next.has(rowKey)) next.delete(rowKey);
-      else next.add(rowKey);
-      return next;
-    });
-  };
-
   const handleExport = async () => {
     if (exporting) return;
 
@@ -899,10 +885,7 @@ export default function BudgetList({ onGoToVisual }) {
         record.form_no === item.form_no
         && record.department_identity_key === item.department_identity_key
       )) || records.find((record) => record.form_no === item.form_no) || item;
-      const detail = item.shared_budget_child_detail
-        ? { ...matchedDetail, ...item }
-        : matchedDetail;
-      setDetailItem(detail);
+      setDetailItem(matchedDetail);
       setDetailExpense(rpt.data?.approvedExpenses || []);
       setDetailExpenseRaw(rpt.data?.approvedExpenseDetails || []);
     } catch (error) {
@@ -1009,7 +992,6 @@ export default function BudgetList({ onGoToVisual }) {
                     <tr>
                       <th style={styles.th}>表单编号</th>
                       <th style={styles.th}>部门</th>
-                      <th style={styles.th}>子部门</th>
                       <th style={styles.th}>预算类型</th>
                       <th style={styles.th}>申请日期</th>
                       <th style={styles.th}>预算月份</th>
@@ -1024,24 +1006,10 @@ export default function BudgetList({ onGoToVisual }) {
                   <tbody>
                     {data.map((item) => {
                       const rowKey = `${item.id || item.form_no}-${item.department_identity_key || item.dept_id || ''}`;
-                      const childExpenses = Array.isArray(item.child_expenses) ? item.child_expenses : [];
-                      const isExpanded = expandedDepartmentRows.has(rowKey);
                       return (
-                      <React.Fragment key={rowKey}>
-                      <tr>
+                      <tr key={rowKey}>
                         <td style={styles.td}>{displayValue(item.form_no)}</td>
-                        <td style={styles.td}>
-                          {displayValue(item.department_display || item.dept_name)}
-                          {childExpenses.length > 0 && (
-                            <button
-                              style={{ ...styles.detailButton, height: 26, marginLeft: 8 }}
-                              onClick={() => toggleDepartmentRow(rowKey)}
-                            >
-                              {isExpanded ? '收起子部门' : `展开 ${childExpenses.length} 个子部门`}
-                            </button>
-                          )}
-                        </td>
-                        <td style={styles.td}>{displayValue(item.sub_department_display)}</td>
+                        <td style={styles.td}>{displayValue(item.department_display || item.dept_name)}</td>
                         <td style={styles.td}>{displayValue(item.budget_type)}</td>
                         <td style={styles.td}>{displayValue(item.application_date)}</td>
                         <td style={styles.td}>{displayValue(item.budget_month || item.declaration_month)}</td>
@@ -1084,66 +1052,6 @@ export default function BudgetList({ onGoToVisual }) {
                           </button>
                         </td>
                       </tr>
-                      {isExpanded && (
-                        childExpenses.map((child) => (
-                          <tr key={`${rowKey}-${child.department_id}`} style={{ background: '#f8fafc' }}>
-                            <td style={styles.td}>{displayValue(item.form_no)}</td>
-                            <td style={styles.td}>{displayValue(item.department_display || item.dept_name)}</td>
-                            <td style={styles.td}>{displayValue(child.department_name)}</td>
-                            <td style={styles.td}>{displayValue(item.budget_type)}</td>
-                            <td style={styles.td}>{displayValue(item.application_date)}</td>
-                            <td style={styles.td}>{displayValue(item.budget_month || item.declaration_month)}</td>
-                            <td style={styles.td}>{displayValue(item.execution_region)}</td>
-                            <td style={styles.td}>
-                              <span style={{ ...styles.status, ...getStatusStyle(item.status) }}>
-                                {displayValue(item.status)}
-                              </span>
-                            </td>
-                            <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
-                              {item.status === '已通过' ? Number(item.total_amount || 0).toFixed(2) : '-'}
-                            </td>
-                            <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
-                              {Number(child.approved_amount || 0).toFixed(2)}
-                            </td>
-                            <td style={styles.td}>{formatDateTime(item.create_time)}</td>
-                            <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
-                              <button
-                                style={styles.detailButton}
-                                onClick={() => handleOpenDetail({
-                                  ...item,
-                                  dept_id: child.department_id,
-                                  dept_name: child.department_name,
-                                  sub_department_display: child.department_name,
-                                  approved_amount: child.approved_amount,
-                                  shared_budget_child_detail: true,
-                                })}
-                              >
-                                详情
-                              </button>
-                              <button
-                                style={{
-                                  ...styles.detailButton,
-                                  marginLeft: 6,
-                                  borderColor: '#d1d5db',
-                                  color: '#6b7280',
-                                  opacity: item.process_instance_id ? 1 : 0.45,
-                                  cursor: item.process_instance_id ? 'pointer' : 'not-allowed',
-                                }}
-                                disabled={!item.process_instance_id}
-                                onClick={() => {
-                                  if (!item.process_instance_id) return;
-                                  const pcUrl = `https://aflow.dingtalk.com/dingtalk/mobile/homepage.htm?showmenu=false&dd_progress=false#/approval?procInstId=${item.process_instance_id}`;
-                                  const magicLink = `dingtalk://dingtalkclient/page/link?url=${encodeURIComponent(pcUrl)}&pc_slide=true`;
-                                  window.open(magicLink, '_blank');
-                                }}
-                              >
-                                {item.process_instance_id ? '钉钉原单' : '无原单'}
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                      </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -1187,7 +1095,6 @@ export default function BudgetList({ onGoToVisual }) {
                   {[
                     ['表单编号', detailItem.form_no],
                     ['部门', detailItem.department_display || detailItem.dept_name],
-                    ['子部门', detailItem.sub_department_display],
                     ['部门 ID', detailItem.dept_id],
                     ['预算类型', detailItem.budget_type],
                     ['状态', detailItem.status],

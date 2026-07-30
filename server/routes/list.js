@@ -992,19 +992,43 @@ function splitRowsOf(item) {
 function applyExpenseDetailReportingOverlay(details) {
   return (details || []).map((item) => {
     const month = item.query_month || approvedDetailMonth(item);
-    const reporting = applyJulyDepartmentReportingOverlay(expenseDepartmentRecord(item), month);
-    const rollupDepartment = sharedBudgetRollupDepartment(expenseDepartmentRecord(item), month);
+    const resolveReporting = (department) => {
+      const reporting = applyJulyDepartmentReportingOverlay(department, month);
+      const rollupDepartment = sharedBudgetRollupDepartment(department, month);
+      if (!rollupDepartment) {
+        return {
+          reporting,
+          rollupDepartment: null,
+          identityKey: reportingDepartmentKey(department, month),
+        };
+      }
+
+      // Shared-budget children are reported as their parent from July onward.
+      return {
+        reporting: {
+          ...reporting,
+          reporting_dept_id: rollupDepartment.department_id,
+          reporting_dept_name: rollupDepartment.department_name,
+          reporting_department_mapped: true,
+        },
+        rollupDepartment,
+        identityKey: `id:${rollupDepartment.department_id}`,
+      };
+    };
+
+    const directDepartment = expenseDepartmentRecord(item);
+    const directReporting = resolveReporting(directDepartment);
     const splits = Array.isArray(item?.expense_splits)
       ? item.expense_splits.map((entry) => {
         const department = splitDepartmentRecord(entry, item.business_id);
-        const splitRollupDepartment = sharedBudgetRollupDepartment(department, month);
+        const splitReporting = resolveReporting(department);
         return {
           ...entry,
-          ...applyJulyDepartmentReportingOverlay(department, month),
-          reporting_department_identity_key: reportingDepartmentKey(department, month),
-          ...(splitRollupDepartment ? {
-            rollup_dept_id: splitRollupDepartment.department_id,
-            rollup_dept_name: splitRollupDepartment.department_name,
+          ...splitReporting.reporting,
+          reporting_department_identity_key: splitReporting.identityKey,
+          ...(splitReporting.rollupDepartment ? {
+            rollup_dept_id: splitReporting.rollupDepartment.department_id,
+            rollup_dept_name: splitReporting.rollupDepartment.department_name,
           } : {}),
         };
       })
@@ -1012,13 +1036,13 @@ function applyExpenseDetailReportingOverlay(details) {
 
     return {
       ...item,
-      reporting_dept_id: reporting.reporting_dept_id,
-      reporting_dept_name: reporting.reporting_dept_name,
-      reporting_department_identity_key: reportingDepartmentKey(expenseDepartmentRecord(item), month),
-      reporting_department_mapped: reporting.reporting_department_mapped,
-      ...(rollupDepartment ? {
-        rollup_dept_id: rollupDepartment.department_id,
-        rollup_dept_name: rollupDepartment.department_name,
+      reporting_dept_id: directReporting.reporting.reporting_dept_id,
+      reporting_dept_name: directReporting.reporting.reporting_dept_name,
+      reporting_department_identity_key: directReporting.identityKey,
+      reporting_department_mapped: directReporting.reporting.reporting_department_mapped,
+      ...(directReporting.rollupDepartment ? {
+        rollup_dept_id: directReporting.rollupDepartment.department_id,
+        rollup_dept_name: directReporting.rollupDepartment.department_name,
       } : {}),
       ...(Array.isArray(splits) ? { expense_splits: splits } : {}),
     };

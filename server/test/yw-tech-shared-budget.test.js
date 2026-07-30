@@ -134,6 +134,38 @@ test('rolls Latin Purchase child report and detail summaries into its parent fro
   assert.equal(sharedBudgetRollupDepartment({ department_id: '1092931411' }, '2026-06'), null);
 });
 
+test('reports YW Tech and Latin Purchase child expense details under their parent departments', () => {
+  const [ywDetail, latinDetail] = applyExpenseDetailReportingOverlay([
+    {
+      business_id: 'YW-CHILD-DIRECT',
+      query_month: '2026-07',
+      applicant_department: '开发',
+      applicant_department_id: '1092483668',
+    },
+    {
+      business_id: 'LATIN-CHILD-SPLIT',
+      query_month: '2026-07',
+      applicant_department: '拉丁购',
+      applicant_department_id: '1089990115',
+      expense_splits: [{
+        department: '产品',
+        department_id: '1092931411',
+        amount: 50,
+        split_type: 'individual_income_tax',
+      }],
+    },
+  ]);
+
+  assert.deepEqual(
+    [ywDetail.reporting_dept_id, ywDetail.reporting_dept_name, ywDetail.reporting_department_identity_key],
+    ['1077343081', '悦为智能 YW Tech_Ai', 'id:1077343081']
+  );
+  assert.deepEqual(
+    [latinDetail.expense_splits[0].reporting_dept_id, latinDetail.expense_splits[0].reporting_dept_name, latinDetail.expense_splits[0].reporting_department_identity_key],
+    ['1089990115', '拉丁购', 'id:1089990115']
+  );
+});
+
 test('normalizes valid shared-budget months and rejects invalid or pre-July months', () => {
   assert.equal(isSharedBudgetParent(latinPurchaseParentBudget), true);
   assert.equal(isSharedBudgetParent({ ...latinPurchaseParentBudget, budget_month: '2026-7' }), true);
