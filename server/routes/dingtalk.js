@@ -72,7 +72,17 @@ function budgetMonthDateSql() {
 export function resolveTableName(type) {
   if (!type) return null;
 
-  const typeValues = (Array.isArray(type) ? type : [type])
+  let rawValues = Array.isArray(type) ? type : [type];
+  if (typeof type === 'string' && type.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(type);
+      if (Array.isArray(parsed)) rawValues = parsed;
+    } catch {
+      // Keep the original value when a connector sends non-JSON text.
+    }
+  }
+
+  const typeValues = rawValues
     .map((value) => String(value).toLowerCase().trim());
   const typeLower = typeValues.join(' ');
 
