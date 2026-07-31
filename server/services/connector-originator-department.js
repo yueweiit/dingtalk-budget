@@ -23,6 +23,8 @@ export function getConnectorOriginator(query = {}) {
       'originator_name',
       'submitterName',
       'submitter_name',
+      'Applicant',
+      '\u63d0\u4ea4\u4eba',
     ]),
   };
 }

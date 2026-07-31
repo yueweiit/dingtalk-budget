@@ -26,6 +26,17 @@ test('connector query supports the department ID aliases used by DingTalk', () =
   }
 });
 
+test('connector query supports DingTalk fixed Chinese department parameter name', () => {
+  assert.deepEqual(buildConnectorDepartmentFilter({
+    '\u90e8\u95e8': 'Sales',
+  }, 1), {
+    condition: 'LOWER(BTRIM(dept_name)) = LOWER(BTRIM($1))',
+    mode: 'name',
+    params: ['Sales'],
+    nextParamIndex: 2,
+  });
+});
+
 test('connector query retains the legacy name filter only when no department ID exists', () => {
   assert.deepEqual(buildConnectorDepartmentFilter({ deptName: 'OBG 线上业务组' }, 1), {
     condition: 'LOWER(BTRIM(dept_name)) = LOWER(BTRIM($1))',

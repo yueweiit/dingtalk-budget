@@ -26,6 +26,15 @@ test('prefers a DingTalk user ID over a display name', () => {
   assert.match(statement.sql, /department\.dept_id = membership\.dept_id/);
 });
 
+test('accepts DingTalk fixed Chinese submitter parameter name', () => {
+  assert.deepEqual(getConnectorOriginator({
+    '\u63d0\u4ea4\u4eba': 'Alice',
+  }), {
+    userId: '',
+    name: 'Alice',
+  });
+});
+
 test('uses the originator name only when no user ID was received', () => {
   const statement = buildOriginatorDepartmentQuery({
     name: 'Alice',

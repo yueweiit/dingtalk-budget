@@ -158,7 +158,7 @@ router.get('/querySimple', async (req, res) => {
     const referenceDate = timeLike || getTodayYmdInTimeZone(SHANGHAI_TZ);
     const queryMonth = getBudgetMonth(referenceDate);
 
-    const tableName = resolveTableName(type);
+    const tableName = resolveTableName(type || req.query['\u751f\u4ea7/\u975e\u751f\u4ea7']);
 
     if (!tableName) {
       return res.json({ budgetAmount: '0' });

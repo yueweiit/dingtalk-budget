@@ -22,7 +22,11 @@ export function buildConnectorDepartmentFilter(query, paramIndex) {
     };
   }
 
-  const departmentName = firstNonEmptyQueryValue(query, ['deptName', 'department']);
+  const departmentName = firstNonEmptyQueryValue(query, [
+    'deptName',
+    'department',
+    '\u90e8\u95e8',
+  ]);
   if (!departmentName) return null;
 
   return {
