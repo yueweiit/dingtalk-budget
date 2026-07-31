@@ -177,6 +177,15 @@ router.get('/querySimple', async (req, res) => {
     } else {
       const resolvedDepartment = await resolveConnectorBudgetDepartment(req.query, queryMonth);
       if (resolvedDepartment.status !== 'ready') {
+        console.warn('[connector] department resolution failed', {
+          queryKeys: Object.keys(req.query),
+          department: req.query.department || req.query.deptName || req.query['\u90e8\u95e8'] || '',
+          originator: getConnectorOriginator(req.query),
+          resolution: resolvedDepartment.status,
+          candidateCount: resolvedDepartment.resolution?.status === 'ambiguous'
+            ? resolvedDepartment.resolution.candidates.length
+            : 0,
+        });
         return res.status(422).json({
           success: false,
           message: resolvedDepartment.status === 'ambiguous'
