@@ -56,3 +56,7 @@ export async function getDepartmentSnapshot(departmentId) {
     return null;
   }
 }
+
+export function getOaDatabaseQuery() {
+  return oaPool.query.bind(oaPool);
+}

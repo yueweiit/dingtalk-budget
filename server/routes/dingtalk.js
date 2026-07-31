@@ -1,6 +1,12 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { buildConnectorDepartmentFilter } from '../services/connector-department-query.js';
+import { getOaDatabaseQuery } from '../services/department-tree.js';
+import {
+  getConnectorOriginator,
+  resolveOriginatorDepartment,
+} from '../services/connector-originator-department.js';
+import { sharedBudgetRollupDepartment } from '../services/yw-tech-shared-budget.js';
 import { assertValidTable } from '../utils/db.js';
 
 const router = express.Router();
@@ -31,6 +37,11 @@ function getMonthRange(dateStr) {
   const nextMonthStart = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`;
 
   return { monthStart, nextMonthStart };
+}
+
+function getBudgetMonth(dateStr) {
+  const range = getMonthRange(dateStr);
+  return range?.monthStart?.slice(0, 7) || '';
 }
 
 const SHANGHAI_TZ = 'Asia/Shanghai';
@@ -87,6 +98,51 @@ function resolveTableName(type) {
   return 'production_budget';
 }
 
+async function resolveConnectorBudgetDepartment(queryParams, month) {
+  const initialFilter = buildConnectorDepartmentFilter(queryParams, 1);
+  if (!initialFilter) {
+    return {
+      status: 'ready',
+      departmentId: '',
+      legacyFilter: initialFilter,
+    };
+  }
+
+  if (initialFilter.mode === 'id') {
+    const departmentId = initialFilter.params[0];
+    const sharedBudgetDepartment = sharedBudgetRollupDepartment({ dept_id: departmentId }, month);
+    return {
+      status: 'ready',
+      departmentId: sharedBudgetDepartment?.department_id || departmentId,
+    };
+  }
+
+  const originator = getConnectorOriginator(queryParams);
+  if (!originator.userId && !originator.name) {
+    return { status: 'ready', departmentId: '', legacyFilter: initialFilter };
+  }
+
+  const resolution = await resolveOriginatorDepartment({
+    originatorUserId: originator.userId,
+    originatorName: originator.name,
+    departmentName: initialFilter.params[0],
+  }, getOaDatabaseQuery());
+
+  if (resolution.status !== 'resolved') {
+    return { status: resolution.status, resolution };
+  }
+
+  const sharedBudgetDepartment = sharedBudgetRollupDepartment(
+    { dept_id: resolution.departmentId },
+    month
+  );
+  return {
+    status: 'ready',
+    departmentId: sharedBudgetDepartment?.department_id || resolution.departmentId,
+    resolution,
+  };
+}
+
 // GET /api/dingtalk/querySimple - 钉钉专用简化接口
 router.get('/querySimple', async (req, res) => {
   try {
@@ -95,9 +151,12 @@ router.get('/querySimple', async (req, res) => {
       startDate
       || endDate
       || req.query.time
+      || req.query.month
       || req.query.date
       || req.query['时间']
       || req.query['申请日期'];
+    const referenceDate = timeLike || getTodayYmdInTimeZone(SHANGHAI_TZ);
+    const queryMonth = getBudgetMonth(referenceDate);
 
     const tableName = resolveTableName(type);
 
@@ -116,8 +175,20 @@ router.get('/querySimple', async (req, res) => {
       whereClause = `WHERE form_no = $${paramIndex}`;
       params.push(formNo);
     } else {
-      // 连接器传入部门 ID 时必须精确匹配；未升级的历史连接器才兼容名称匹配。
-      const departmentFilter = buildConnectorDepartmentFilter(req.query, paramIndex);
+      const resolvedDepartment = await resolveConnectorBudgetDepartment(req.query, queryMonth);
+      if (resolvedDepartment.status !== 'ready') {
+        return res.status(422).json({
+          success: false,
+          message: resolvedDepartment.status === 'ambiguous'
+            ? '部门归属不唯一，请配置提交人对应的部门'
+            : '未找到提交人与部门的对应关系，请检查组织架构同步',
+        });
+      }
+
+      // 连接器传入部门 ID 或能由提交人唯一解析时，按真实部门 ID 精确查询。
+      const departmentFilter = resolvedDepartment.departmentId
+        ? buildConnectorDepartmentFilter({ departmentId: resolvedDepartment.departmentId }, paramIndex)
+        : resolvedDepartment.legacyFilter;
       if (departmentFilter) {
         whereClause += ` AND ${departmentFilter.condition}`;
         params.push(...departmentFilter.params);
@@ -125,7 +196,6 @@ router.get('/querySimple', async (req, res) => {
       }
 
       // 未传任何日期时，按「上海时区今天」所在自然月过滤，避免一直命中历史最新一条
-      const referenceDate = timeLike || getTodayYmdInTimeZone(SHANGHAI_TZ);
       const monthRange = getMonthRange(referenceDate);
       if (monthRange) {
         const monthDate = budgetMonthDateSql();
