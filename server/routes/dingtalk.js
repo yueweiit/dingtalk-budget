@@ -69,14 +69,16 @@ function budgetMonthDateSql() {
   )`;
 }
 
-function resolveTableName(type) {
+export function resolveTableName(type) {
   if (!type) return null;
 
-  const typeLower = String(type).toLowerCase().trim();
+  const typeValues = (Array.isArray(type) ? type : [type])
+    .map((value) => String(value).toLowerCase().trim());
+  const typeLower = typeValues.join(' ');
 
   // 先判断“非生产”，避免“生产”关键字被误命中
   if (
-    typeLower === 'option_1' ||
+    typeValues.includes('option_1') ||
     typeLower.includes('non-production') ||
     typeLower.includes('非生产') ||
     typeLower.includes('no producción') ||
@@ -86,7 +88,7 @@ function resolveTableName(type) {
   }
 
   if (
-    typeLower === 'option_2' ||
+    typeValues.includes('option_2') ||
     typeLower.includes('production') ||
     typeLower.includes('生产') ||
     typeLower.includes('producción') ||
