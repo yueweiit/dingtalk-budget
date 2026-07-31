@@ -1,3 +1,5 @@
+import { SHARED_BUDGET_CONFIGS } from './yw-tech-shared-budget.js';
+
 function text(value) {
   return String(value ?? '').trim();
 }
@@ -68,10 +70,47 @@ export function buildOriginatorDepartmentQuery({ userId, name, departmentName })
   };
 }
 
+function buildSharedParentFallbackQuery({ userId, name, departmentName, parentId, memberIds }) {
+  const identity = text(userId) || text(name);
+  const inferredUserId = !text(userId) && isDingTalkUserId(text(name)) ? text(name) : '';
+  const identityColumn = text(userId) || inferredUserId ? 'user_snapshot.user_id' : 'user_snapshot.name';
+
+  return {
+    sql: `
+      SELECT DISTINCT
+        user_snapshot.user_id,
+        user_snapshot.name AS originator_name,
+        department.dept_id,
+        department.name AS department_name,
+        department.path_names
+      FROM ding_user_snapshot AS user_snapshot
+      CROSS JOIN LATERAL jsonb_array_elements_text(
+        CASE
+          WHEN jsonb_typeof(user_snapshot.dept_id_list) = 'array' THEN user_snapshot.dept_id_list
+          ELSE '[]'::jsonb
+        END
+      ) AS membership(dept_id)
+      JOIN ding_department_tree AS department
+        ON department.corp_id = user_snapshot.corp_id
+       AND department.dept_id = $3
+      WHERE user_snapshot.is_current = true
+        AND user_snapshot.fetch_status = 'success'
+        AND department.is_current = true
+        AND BTRIM(${identityColumn}) = BTRIM($1)
+        AND BTRIM(department.name) = BTRIM($2)
+        AND membership.dept_id = ANY($4::varchar[])
+      ORDER BY department.dept_id
+    `,
+    params: [text(userId) || inferredUserId || identity, text(departmentName), parentId, memberIds],
+    matchedBy: text(userId) || inferredUserId ? 'user_id' : 'name',
+  };
+}
+
 export async function resolveOriginatorDepartment({
   originatorUserId,
   originatorName,
   departmentName,
+  sharedBudgetMonth,
 }, query) {
   const userId = text(originatorUserId);
   const name = text(originatorName);
@@ -87,7 +126,21 @@ export async function resolveOriginatorDepartment({
     departmentName: normalizedDepartmentName,
   });
   const result = await query(statement.sql, statement.params);
-  const candidates = result.rows || [];
+  let candidates = result.rows || [];
+
+  if (candidates.length === 0 && text(sharedBudgetMonth) >= '2026-07') {
+    for (const config of SHARED_BUDGET_CONFIGS) {
+      const fallback = buildSharedParentFallbackQuery({
+        userId,
+        name,
+        departmentName: normalizedDepartmentName,
+        parentId: config.parent.id,
+        memberIds: [config.parent.id, ...config.children.map((child) => child.id)],
+      });
+      const fallbackResult = await query(fallback.sql, fallback.params);
+      candidates = candidates.concat(fallbackResult.rows || []);
+    }
+  }
 
   if (candidates.length === 0) {
     return {

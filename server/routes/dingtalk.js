@@ -138,6 +138,7 @@ async function resolveConnectorBudgetDepartment(queryParams, month) {
     originatorUserId: originator.userId,
     originatorName: originator.name,
     departmentName: initialFilter.params[0],
+    sharedBudgetMonth: month,
   }, getOaDatabaseQuery());
 
   if (resolution.status !== 'resolved') {

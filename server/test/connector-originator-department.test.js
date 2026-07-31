@@ -93,3 +93,40 @@ test('refuses an ambiguous same-name department match', async () => {
   assert.equal(result.status, 'ambiguous');
   assert.equal(result.candidates.length, 2);
 });
+
+test('allows a YW Tech child member to select the shared parent from July onward', async () => {
+  let callCount = 0;
+  const result = await resolveOriginatorDepartment({
+    originatorUserId: 'user-1',
+    departmentName: '\u60a6\u4e3a\u667a\u80fd YW Tech_Ai',
+    sharedBudgetMonth: '2026-07',
+  }, async (_sql, params) => {
+    callCount += 1;
+    if (callCount === 1) return { rows: [] };
+    if (params?.[2] === '1077343081') {
+      return {
+        rows: [{
+          user_id: 'user-1',
+          originator_name: 'Alice',
+          dept_id: '1077343081',
+          department_name: '\u60a6\u4e3a\u667a\u80fd YW Tech_Ai',
+          path_names: [],
+        }],
+      };
+    }
+    return { rows: [] };
+  });
+
+  assert.equal(result.status, 'resolved');
+  assert.equal(result.status === 'resolved' && result.departmentId, '1077343081');
+});
+
+test('does not allow shared-parent fallback before July', async () => {
+  const result = await resolveOriginatorDepartment({
+    originatorUserId: 'user-1',
+    departmentName: '\u60a6\u4e3a\u667a\u80fd YW Tech_Ai',
+    sharedBudgetMonth: '2026-06',
+  }, async () => ({ rows: [] }));
+
+  assert.equal(result.status, 'not_found');
+});
