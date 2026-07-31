@@ -2,6 +2,10 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+function isDingTalkUserId(value) {
+  return /^\d{12,}$/.test(value);
+}
+
 function firstQueryValue(query, keys) {
   for (const key of keys) {
     const value = text(query?.[key]);
@@ -31,7 +35,8 @@ export function getConnectorOriginator(query = {}) {
 
 export function buildOriginatorDepartmentQuery({ userId, name, departmentName }) {
   const identity = text(userId) || text(name);
-  const identityColumn = text(userId) ? 'user_snapshot.user_id' : 'user_snapshot.name';
+  const inferredUserId = !text(userId) && isDingTalkUserId(text(name)) ? text(name) : '';
+  const identityColumn = text(userId) || inferredUserId ? 'user_snapshot.user_id' : 'user_snapshot.name';
 
   return {
     sql: `
@@ -58,8 +63,8 @@ export function buildOriginatorDepartmentQuery({ userId, name, departmentName })
         AND BTRIM(department.name) = BTRIM($2)
       ORDER BY department.dept_id
     `,
-    params: [identity, text(departmentName)],
-    matchedBy: text(userId) ? 'user_id' : 'name',
+    params: [text(userId) || inferredUserId || identity, text(departmentName)],
+    matchedBy: text(userId) || inferredUserId ? 'user_id' : 'name',
   };
 }
 
