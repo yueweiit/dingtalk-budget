@@ -160,6 +160,12 @@ router.get('/querySimple', async (req, res) => {
 
     const tableName = resolveTableName(type || req.query['\u751f\u4ea7/\u975e\u751f\u4ea7']);
 
+    console.info('[connector] budget type resolved', {
+      type,
+      chineseType: req.query['\u751f\u4ea7/\u975e\u751f\u4ea7'] || '',
+      tableName,
+    });
+
     if (!tableName) {
       return res.json({ budgetAmount: '0' });
     }
