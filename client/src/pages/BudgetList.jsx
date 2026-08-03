@@ -992,6 +992,7 @@ export default function BudgetList({ onGoToVisual }) {
                     <tr>
                       <th style={styles.th}>表单编号</th>
                       <th style={styles.th}>部门</th>
+                      <th style={styles.th}>子部门</th>
                       <th style={styles.th}>预算类型</th>
                       <th style={styles.th}>申请日期</th>
                       <th style={styles.th}>预算月份</th>
@@ -1010,6 +1011,7 @@ export default function BudgetList({ onGoToVisual }) {
                       <tr key={rowKey}>
                         <td style={styles.td}>{displayValue(item.form_no)}</td>
                         <td style={styles.td}>{displayValue(item.department_display || item.dept_name)}</td>
+                        <td style={styles.td}>{displayValue(item.sub_department_display)}</td>
                         <td style={styles.td}>{displayValue(item.budget_type)}</td>
                         <td style={styles.td}>{displayValue(item.application_date)}</td>
                         <td style={styles.td}>{displayValue(item.budget_month || item.declaration_month)}</td>
@@ -1095,6 +1097,7 @@ export default function BudgetList({ onGoToVisual }) {
                   {[
                     ['表单编号', detailItem.form_no],
                     ['部门', detailItem.department_display || detailItem.dept_name],
+                    ['子部门', detailItem.sub_department_display],
                     ['部门 ID', detailItem.dept_id],
                     ['预算类型', detailItem.budget_type],
                     ['状态', detailItem.status],
