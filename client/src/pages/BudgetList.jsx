@@ -991,8 +991,8 @@ export default function BudgetList({ onGoToVisual }) {
                   <thead>
                     <tr>
                       <th style={styles.th}>表单编号</th>
+                      <th style={styles.th}>子公司</th>
                       <th style={styles.th}>部门</th>
-                      <th style={styles.th}>子部门</th>
                       <th style={styles.th}>预算类型</th>
                       <th style={styles.th}>申请日期</th>
                       <th style={styles.th}>预算月份</th>
@@ -1096,8 +1096,8 @@ export default function BudgetList({ onGoToVisual }) {
                 <div style={styles.infoGrid}>
                   {[
                     ['表单编号', detailItem.form_no],
-                    ['部门', detailItem.department_display || detailItem.dept_name],
-                    ['子部门', detailItem.sub_department_display],
+                    ['子公司', detailItem.department_display || detailItem.dept_name],
+                    ['部门', detailItem.sub_department_display],
                     ['部门 ID', detailItem.dept_id],
                     ['预算类型', detailItem.budget_type],
                     ['状态', detailItem.status],
