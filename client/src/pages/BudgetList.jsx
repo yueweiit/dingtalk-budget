@@ -12,6 +12,7 @@ import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections'
 import { departmentMatches } from '../utils/departmentIdentity.js';
 import { expenseDetailSplitRecord } from '../utils/expenseDetailSplit.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
+import { departmentPathTitle } from '../utils/departmentPath.js';
 
 const styles = {
   page: {
@@ -395,6 +396,15 @@ function toNum(v) { const n = Number(String(v ?? '').replace(/,/g, '')); return 
 function fmtWan(v) { const n = toNum(v); return n >= 10000 ? '¥' + (n / 10000).toFixed(2) + '万' : '¥' + n.toFixed(2); }
 function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '') || '';
+}
+
+function DepartmentPathValue({ record, children }) {
+  const title = departmentPathTitle(record);
+  return (
+    <span title={title || undefined} style={title ? { cursor: 'help' } : undefined}>
+      {children}
+    </span>
+  );
 }
 
 function detailMonthOf(item) {
@@ -1010,8 +1020,16 @@ export default function BudgetList({ onGoToVisual }) {
                       return (
                       <tr key={rowKey}>
                         <td style={styles.td}>{displayValue(item.form_no)}</td>
-                        <td style={styles.td}>{displayValue(item.department_display || item.dept_name)}</td>
-                        <td style={styles.td}>{displayValue(item.sub_department_display)}</td>
+                        <td style={styles.td}>
+                          <DepartmentPathValue record={item}>
+                            {displayValue(item.department_display || item.dept_name)}
+                          </DepartmentPathValue>
+                        </td>
+                        <td style={styles.td}>
+                          <DepartmentPathValue record={item}>
+                            {displayValue(item.sub_department_display)}
+                          </DepartmentPathValue>
+                        </td>
                         <td style={styles.td}>{displayValue(item.budget_type)}</td>
                         <td style={styles.td}>{displayValue(item.application_date)}</td>
                         <td style={styles.td}>{displayValue(item.budget_month || item.declaration_month)}</td>
@@ -1110,7 +1128,15 @@ export default function BudgetList({ onGoToVisual }) {
                   ].map(([label, value]) => (
                     <div style={styles.infoItem} key={label}>
                       <span style={styles.infoLabel}>{label}</span>
-                      <span style={styles.infoValue}>{displayValue(value)}</span>
+                      <span style={styles.infoValue}>
+                        {value === detailItem.department_display
+                          || value === detailItem.dept_name
+                          || value === detailItem.sub_department_display ? (
+                          <DepartmentPathValue record={detailItem}>
+                            {displayValue(value)}
+                          </DepartmentPathValue>
+                        ) : displayValue(value)}
+                      </span>
                     </div>
                   ))}
                 </div>
