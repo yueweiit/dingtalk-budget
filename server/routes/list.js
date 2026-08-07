@@ -1561,6 +1561,22 @@ async function countNonProductionBudgetRows(client, filters = {}) {
   return result.rows[0]?.count || 0;
 }
 
+export function mergeBudgetRows(...groups) {
+  return groups.flat().sort((left, right) => {
+    const createdAtOrder = String(right.create_time || '').localeCompare(String(left.create_time || ''));
+    if (createdAtOrder !== 0) return createdAtOrder;
+    return Number(right.id || 0) - Number(left.id || 0);
+  });
+}
+
+async function fetchAllBudgetRows(client, filters = {}) {
+  const [productionRows, nonProductionRows] = await Promise.all([
+    fetchProductionBudgetRows(client, filters),
+    fetchNonProductionBudgetRows(client, filters),
+  ]);
+  return mergeBudgetRows(productionRows, nonProductionRows);
+}
+
 async function fetchBudgetedDepartmentMonthSet(client, filters = {}) {
   const [productionRows, nonProductionRows] = await Promise.all([
     fetchProductionBudgetRows(client, filters, null, { filterExecutionRegion: false }),
@@ -1626,6 +1642,36 @@ router.get('/non-production', async (req, res) => {
   } catch (error) {
     console.error('[ERROR] List non-production error:', error);
     res.status(500).json({ success: false, message: isProduction ? '查询失败' : error.message });
+  }
+});
+
+// GET /api/list/all - unified budget list with post-merge pagination.
+router.get('/all', async (req, res) => {
+  try {
+    const { startDate, endDate, status, page = 1, pageSize = 20 } = req.query;
+    const offset = (page - 1) * pageSize;
+    const db = { query };
+    const filters = { startDate, endDate, status };
+    const [dataRows, budgetedDepartmentMonths] = await Promise.all([
+      fetchAllBudgetRows(db, filters),
+      fetchBudgetedDepartmentMonthSet(db, filters),
+    ]);
+    const rowsWithExpense = await attachExpenseAmounts(dataRows, {
+      startDate,
+      endDate,
+      budgetedDepartmentMonths,
+    });
+
+    res.json({
+      success: true,
+      data: rowsWithExpense.slice(offset, offset + Number(pageSize)),
+      total: rowsWithExpense.length,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize),
+    });
+  } catch (error) {
+    console.error('[ERROR] List all budgets error:', error);
+    res.status(500).json({ success: false, message: isProduction ? 'Query failed' : error.message });
   }
 });
 

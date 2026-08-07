@@ -37,6 +37,11 @@ export async function getNonProductionList(params) {
   return response.data;
 }
 
+export async function getAllBudgetList(params) {
+  const response = await api.get('/list/all', { params });
+  return response.data;
+}
+
 // 获取审批流程记录
 export async function getApprovalList(params) {
   const response = await api.get('/list/approval', { params });

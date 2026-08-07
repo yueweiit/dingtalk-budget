@@ -6,7 +6,7 @@ import ExpenseSplitSyncButton from '../components/ExpenseSplitSyncButton';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts';
 
-import { getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
+import { getAllBudgetList, getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
 import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections';
 import { departmentMatches } from '../utils/departmentIdentity.js';
@@ -364,6 +364,7 @@ const styles = {
 };
 
 const tabs = [
+  { key: 'all', label: '\u5168\u90e8' },
   { key: 'production', label: '生产预算' },
   { key: 'non-production', label: '非生产预算' },
 ];
@@ -788,7 +789,7 @@ function downloadCSV(rows, filename) {
 }
 
 export default function BudgetList({ onGoToVisual }) {
-  const [activeTab, setActiveTab] = useState('production');
+  const [activeTab, setActiveTab] = useState('all');
   const [startDate, setStartDate] = useState(monthStart());
   const [endDate, setEndDate] = useState(monthEnd());
   const [data, setData] = useState([]);
@@ -814,9 +815,11 @@ export default function BudgetList({ onGoToVisual }) {
     setErrorMessage('');
     try {
       const params = { startDate, endDate, page, pageSize };
-      const result = activeTab === 'production'
-        ? await getProductionList(params)
-        : await getNonProductionList(params);
+      const result = activeTab === 'all'
+        ? await getAllBudgetList(params)
+        : activeTab === 'production'
+          ? await getProductionList(params)
+          : await getNonProductionList(params);
 
       setData(result.data || []);
       setTotal(result.total || 0);
@@ -889,8 +892,11 @@ export default function BudgetList({ onGoToVisual }) {
       const bm = item.budget_month || item.declaration_month || '';
       // 用 report 接口获取完整明细（含 hr_items/office_items/operation_items）
       const rpt = await getReportData({ startDate: bm, endDate: bm, includeApproved: 1 });
-      // 从 nonProduction 中找到匹配的 form_no
-      const records = activeTab === 'production' ? (rpt.data?.production || []) : (rpt.data?.nonProduction || []);
+      const records = activeTab === 'all'
+        ? [...(rpt.data?.production || []), ...(rpt.data?.nonProduction || [])]
+        : activeTab === 'production'
+          ? (rpt.data?.production || [])
+          : (rpt.data?.nonProduction || []);
       const matchedDetail = records.find((record) => (
         record.form_no === item.form_no
         && record.department_identity_key === item.department_identity_key
