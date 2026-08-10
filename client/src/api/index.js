@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { mergeBudgetListRows, pageBudgetListRows } from '../utils/budgetList.js';
 
 const headers = {};
 if (import.meta.env.VITE_API_KEY) {
@@ -37,9 +38,32 @@ export async function getNonProductionList(params) {
   return response.data;
 }
 
-export async function getAllBudgetList(params) {
-  const response = await api.get('/list/all', { params });
-  return response.data;
+export async function getAllBudgetList(params = {}) {
+  try {
+    const response = await api.get('/list/all', { params });
+    return response.data;
+  } catch (error) {
+    if (error.response?.status !== 404) throw error;
+
+    // Older budget servers do not have /list/all yet. Preserve the new UI by
+    // combining the two established endpoints until the server is updated.
+    const fallbackParams = { ...params, page: 1, pageSize: 100000 };
+    const [production, nonProduction] = await Promise.all([
+      getProductionList(fallbackParams),
+      getNonProductionList(fallbackParams),
+    ]);
+    const rows = mergeBudgetListRows(production.data || [], nonProduction.data || []);
+    const page = Number(params.page) || 1;
+    const pageSize = Number(params.pageSize) || 20;
+    return {
+      success: true,
+      data: pageBudgetListRows(rows, page, pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+      compatibilityFallback: true,
+    };
+  }
 }
 
 // 获取审批流程记录
