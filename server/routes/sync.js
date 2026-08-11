@@ -231,6 +231,7 @@ export async function refreshExistingBudgetStatuses(options = {}) {
     startTime,
     endTime,
     limit = DEFAULT_STATUS_REFRESH_LIMIT,
+    pendingOnly = false,
   } = options;
   const params = [];
   let paramIndex = 1;
@@ -248,6 +249,7 @@ export async function refreshExistingBudgetStatuses(options = {}) {
       FROM production_budget p
       WHERE p.process_instance_id IS NOT NULL
         AND TRIM(p.process_instance_id) <> ''
+        ${pendingOnly ? "AND p.status = '审批中'" : ''}
         ${productionFilter.sql}
       UNION ALL
       SELECT 'non_production' AS budget_kind, n.form_no, n.process_instance_id, n.status,
@@ -255,6 +257,7 @@ export async function refreshExistingBudgetStatuses(options = {}) {
       FROM non_production_budget n
       WHERE n.process_instance_id IS NOT NULL
         AND TRIM(n.process_instance_id) <> ''
+        ${pendingOnly ? "AND n.status = '审批中'" : ''}
         ${nonProductionFilter.sql}
     ) rows
     ORDER BY budget_month_key DESC NULLS LAST, form_no DESC
@@ -471,6 +474,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
 
   const budgetType = getBudgetType(detail);
   const tableName = assertValidTable(budgetType === 'production' ? 'production_budget' : 'non_production_budget');
+  const approvalState = getApprovalState(detail);
 
   const existingStatus = await updateExistingBudgetStatus(tableName, formNo, detail);
   if (existingStatus.updated) {
@@ -480,7 +484,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
       added: 0,
       updated: 1,
       existing: 0,
-      pending: 0,
+      pending: approvalState.retryable ? 1 : 0,
       skipped: 0,
       formNo,
       processInstanceId,
@@ -489,7 +493,6 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
     };
   }
 
-  const approvalState = getApprovalState(detail);
   if (!approvalState.approved) {
     // 未审批的也入库（显示为审批中/已撤销等），但标注为 pending
     const formNo = detail.businessId;
@@ -515,7 +518,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
       }
       return {
         success: true, synced: 0, added: 0, updated: 1, existing: 0,
-        pending: 0, skipped: 0, processInstanceId, formNo,
+        pending: approvalState.retryable ? 1 : 0, skipped: 0, processInstanceId, formNo,
         message: `Pending record updated: status=${dingtalkStatus}`,
       };
     }
@@ -524,7 +527,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
     console.log(`[SYNC] Pending inserted: ${formNo}, status=${dingtalkStatus}`);
     return {
       success: true, synced: 1, added: 1, updated: 0, existing: 0,
-      pending: 0, skipped: 0, processInstanceId, formNo,
+      pending: approvalState.retryable ? 1 : 0, skipped: 0, processInstanceId, formNo,
       message: `Pending record inserted: status=${dingtalkStatus}`,
     };
   }

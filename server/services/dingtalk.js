@@ -155,9 +155,9 @@ export function buildOaDbInstanceIdsQuery() {
       FROM ding_approval_instance
       WHERE deleted_at IS NULL
         AND process_code = $1
-        AND create_time >= to_timestamp($2 / 1000.0)
-        AND create_time <= to_timestamp($3 / 1000.0)
-      ORDER BY create_time ASC, process_instance_id ASC
+        AND COALESCE(last_event_time, updated_at, create_time) >= to_timestamp($2 / 1000.0)
+        AND COALESCE(last_event_time, updated_at, create_time) <= to_timestamp($3 / 1000.0)
+      ORDER BY COALESCE(last_event_time, updated_at, create_time) ASC, process_instance_id ASC
     `;
 }
 
