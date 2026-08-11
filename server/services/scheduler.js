@@ -2,7 +2,11 @@ import cron from 'node-cron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { syncDingtalkData, syncDingtalkInstance } from '../routes/sync.js';
+import {
+  refreshExistingBudgetStatuses,
+  syncDingtalkData,
+  syncDingtalkInstance,
+} from '../routes/sync.js';
 
 const DEFAULT_SYNC_CRON = '2 * * * *';
 const SYNC_CRON = process.env.SYNC_CRON || DEFAULT_SYNC_CRON;
@@ -11,6 +15,12 @@ const INITIAL_LOOKBACK_MINUTES = Number(process.env.SYNC_INITIAL_LOOKBACK_MINUTE
 const BACKFILL_ENABLED = process.env.SYNC_BACKFILL_ENABLED !== '0';
 const BACKFILL_INTERVAL_MINUTES = Number(process.env.SYNC_BACKFILL_INTERVAL_MINUTES || 360);
 const BACKFILL_LOOKBACK_DAYS = Number(process.env.SYNC_BACKFILL_LOOKBACK_DAYS || 3);
+const PENDING_STATUS_REFRESH_ENABLED = process.env.SYNC_PENDING_STATUS_REFRESH_ENABLED !== '0';
+const CONFIGURED_PENDING_STATUS_REFRESH_LIMIT = Number(process.env.SYNC_PENDING_STATUS_REFRESH_LIMIT || 200);
+const PENDING_STATUS_REFRESH_LIMIT = Number.isFinite(CONFIGURED_PENDING_STATUS_REFRESH_LIMIT)
+  && CONFIGURED_PENDING_STATUS_REFRESH_LIMIT > 0
+  ? CONFIGURED_PENDING_STATUS_REFRESH_LIMIT
+  : 200;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = process.env.SYNC_STATE_FILE || join(__dirname, '..', 'data', 'sync-state.json');
@@ -132,6 +142,21 @@ async function runIncrementalSync() {
   const windowResult = await syncDingtalkData(startTime, endTime, { updateExisting: false });
 
   addPendingInstances(state, windowResult.pendingInstances, runStartedAt);
+  let pendingStatusRefresh = null;
+  if (PENDING_STATUS_REFRESH_ENABLED) {
+    try {
+      pendingStatusRefresh = await refreshExistingBudgetStatuses({
+        startTime,
+        endTime,
+        limit: PENDING_STATUS_REFRESH_LIMIT,
+        pendingOnly: true,
+      });
+    } catch (error) {
+      pendingStatusRefresh = { failed: 1, message: error.message };
+      console.error('[SCHEDULER] Pending budget status refresh failed:', error.message);
+    }
+  }
+
   let backfillResult = null;
   const safeBackfillInterval = Number.isFinite(BACKFILL_INTERVAL_MINUTES) && BACKFILL_INTERVAL_MINUTES > 0
     ? BACKFILL_INTERVAL_MINUTES
@@ -163,6 +188,7 @@ async function runIncrementalSync() {
     },
     pendingSummary,
     windowResult,
+    pendingStatusRefresh,
     backfillResult,
   };
 
@@ -173,6 +199,7 @@ async function runIncrementalSync() {
     window: state.lastRun.window,
     pendingSummary,
     windowResult,
+    pendingStatusRefresh,
     backfillResult,
     pendingCount: Object.keys(state.pendingInstances).length,
   };
@@ -209,7 +236,7 @@ export function startScheduler() {
     scheduledTasks.push(task);
   }
 
-  console.log(`[SCHEDULER] Started - cron=${SYNC_CRON}, timezone=${SYNC_TIMEZONE}, backfill=${BACKFILL_ENABLED}, backfillIntervalMinutes=${BACKFILL_INTERVAL_MINUTES}, backfillLookbackDays=${BACKFILL_LOOKBACK_DAYS}, stateFile=${STATE_FILE}`);
+  console.log(`[SCHEDULER] Started - cron=${SYNC_CRON}, timezone=${SYNC_TIMEZONE}, backfill=${BACKFILL_ENABLED}, backfillIntervalMinutes=${BACKFILL_INTERVAL_MINUTES}, backfillLookbackDays=${BACKFILL_LOOKBACK_DAYS}, pendingStatusRefresh=${PENDING_STATUS_REFRESH_ENABLED}, pendingStatusRefreshLimit=${PENDING_STATUS_REFRESH_LIMIT}, stateFile=${STATE_FILE}`);
 }
 
 export function stopScheduler() {
@@ -240,6 +267,10 @@ export async function getSchedulerStatus() {
       enabled: BACKFILL_ENABLED,
       intervalMinutes: BACKFILL_INTERVAL_MINUTES,
       lookbackDays: BACKFILL_LOOKBACK_DAYS,
+    },
+    pendingStatusRefresh: {
+      enabled: PENDING_STATUS_REFRESH_ENABLED,
+      limit: PENDING_STATUS_REFRESH_LIMIT,
     },
     pendingCount: Object.keys(state.pendingInstances || {}).length,
     lastRun: state.lastRun,
