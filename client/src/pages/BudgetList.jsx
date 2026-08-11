@@ -13,6 +13,7 @@ import { departmentMatches } from '../utils/departmentIdentity.js';
 import { expenseDetailSplitRecord } from '../utils/expenseDetailSplit.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 import { departmentPathTitle } from '../utils/departmentPath.js';
+import { shouldDisplayBudgetListAmounts } from '../utils/budgetList.js';
 
 const styles = {
   page: {
@@ -1046,10 +1047,10 @@ export default function BudgetList({ onGoToVisual }) {
                           </span>
                         </td>
                         <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
-                          {item.status === '已通过' ? Number(item.total_amount || 0).toFixed(2) : '-'}
+                          {shouldDisplayBudgetListAmounts(item.status) ? Number(item.total_amount || 0).toFixed(2) : '-'}
                         </td>
                         <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>
-                          {item.status === '已通过' ? Number(item.approved_amount || 0).toFixed(2) : '-'}
+                          {shouldDisplayBudgetListAmounts(item.status) ? Number(item.approved_amount || 0).toFixed(2) : '-'}
                         </td>
                         <td style={styles.td}>{formatDateTime(item.create_time)}</td>
                         <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>

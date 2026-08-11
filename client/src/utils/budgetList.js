@@ -12,3 +12,7 @@ export function pageBudgetListRows(rows, page = 1, pageSize = 20) {
   const offset = (safePage - 1) * safePageSize;
   return rows.slice(offset, offset + safePageSize);
 }
+
+export function shouldDisplayBudgetListAmounts(status) {
+  return status === '已通过' || status === '审批中';
+}
