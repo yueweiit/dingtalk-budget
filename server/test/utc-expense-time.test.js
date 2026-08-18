@@ -3,9 +3,9 @@ import test from 'node:test';
 
 import { approvalExpenseDateExpr } from '../routes/list.js';
 
-test('approval expense date filtering uses UTC for timestamp values', () => {
+test('approval expense date filtering uses final approval completion time in UTC', () => {
   assert.equal(
     approvalExpenseDateExpr('o'),
-    "((o.source_created_at AT TIME ZONE 'UTC')::date)"
+    "((o.approval_completed_at AT TIME ZONE 'UTC')::date)"
   );
 });

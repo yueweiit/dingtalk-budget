@@ -682,7 +682,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
     .flatMap((item) => {
       const splits = extractExpenseDeptSplits(item);
       const baseAmount = toAmount(firstValue(item, ['base_currency_amount', 'detail_summary_amount', 'amount_rmb', 'amount', 'source_amount', 'total_amount'], ''));
-      const month = firstValue(item, ['query_month'], formatMonth(item.source_created_at || item.request_date || item.approval_completed_at));
+      const month = firstValue(item, ['query_month'], formatMonth(item.approval_completed_at));
 
       if (splits.length === 0) {
         // 无拆分：保持原有的单行

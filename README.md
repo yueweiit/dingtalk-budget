@@ -29,6 +29,7 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - 7-sheet XLSX report export (summary, execution, department share, expense details, etc.)
 - DingTalk bot query endpoint (`/api/dingtalk/querySimple`)
 - Pending approval auto-retry with backfill mechanism
+- Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
 - API Key authentication, rate limiting, circuit breaker
 
 ## Tech Stack
@@ -129,6 +130,10 @@ Optional variables:
 When `DINGTALK_SYNC_SOURCE=dingtalk`, `DINGTALK_APP_KEY` and `DINGTALK_APP_SECRET` are required.
 
 When `DINGTALK_SYNC_SOURCE=oa_db`, the budget sync reads approval instances from the `dingtalk_oa` database instead of calling DingTalk directly. In that mode, set `OA_DB_HOST` / `OA_DB_PORT` / `OA_DB_DATABASE` / `OA_DB_USER` / `OA_DB_PASSWORD` if they differ from the main PostgreSQL connection.
+
+### 实际支出统计口径
+
+列表、详情、报表和 Excel（电子表格）导出的实际支出统一只统计整单 `COMPLETED`（已完成）且最终结果为同意/通过、并且存在 `approval_completed_at`（审批完成时间）的记录；月份按该时间的 UTC（世界协调时间）月份计算。最终结果优先读取 OA 原始数据的 `result`，为空时才兼容回退到 `flowResult`、`flow_result`。预算申请金额仍按原提交时间和原有效状态逻辑统计，不受本规则改变。
 
 ### 3. Install Dependencies
 

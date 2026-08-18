@@ -411,7 +411,7 @@ function DepartmentPathValue({ record, children }) {
 
 function detailMonthOf(item) {
   if (item?.query_month) return String(item.query_month).trim();
-  const date = firstNonEmpty(item?.source_created_at, item?.request_date, item?.approval_completed_at);
+  const date = firstNonEmpty(item?.approval_completed_at);
   if (!date) return '';
   return formatUtcMonth(date);
 }
@@ -523,7 +523,7 @@ function extractDetailSplits(item) {
 
 function expenseDetailBase(item) {
   return {
-    date: firstNonEmpty(item?.source_created_at, item?.request_date, item?.approval_completed_at),
+    date: firstNonEmpty(item?.approval_completed_at),
     businessId: item?.business_id || '',
     title: item?.title || '',
     description: firstNonEmpty(item?.matter_description, item?.title),

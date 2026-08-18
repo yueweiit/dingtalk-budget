@@ -1,7 +1,6 @@
 import express from 'express';
 import pg from 'pg';
 import { query } from '../db/index.js';
-import { getProcessInstanceDetail } from '../services/dingtalk.js';
 import {
   buildDepartmentPresentation,
   departmentIdentityKey,
@@ -17,6 +16,11 @@ import {
   sharedBudgetRollupDepartment,
 } from '../services/yw-tech-shared-budget.js';
 import { assertValidTable } from '../utils/db.js';
+import {
+  completedApprovalResultSql,
+  completedApprovedExpenseWhere,
+  isCompletedApprovedExpense,
+} from '../utils/completed-expense-policy.js';
 
 const router = express.Router();
 const { Client } = pg;
@@ -24,15 +28,10 @@ const isProduction = process.env.NODE_ENV === 'production';
 const APPROVAL_DB_DATABASE = process.env.APPROVAL_DB_DATABASE ||
   process.env.DINGTALK_APPROVAL_DATABASE ||
   'dingtalk_approval';
-const VERIFY_EXPENSE_STATUS_WITH_DINGTALK = process.env.VERIFY_EXPENSE_STATUS_WITH_DINGTALK === '1';
-const EXPENSE_STATUS_VERIFY_LIMIT = Number(process.env.EXPENSE_STATUS_VERIFY_LIMIT || 300);
-const EXPENSE_STATUS_CACHE_TTL_MS = Number(process.env.EXPENSE_STATUS_CACHE_TTL_MS || 10 * 60 * 1000);
-const EXPENSE_STATUS_VERIFY_CONCURRENCY = Number(process.env.EXPENSE_STATUS_VERIFY_CONCURRENCY || 8);
 const APPROVED_EXPENSE_CACHE_TTL_MS = Number(process.env.APPROVED_EXPENSE_CACHE_TTL_MS || 60 * 1000);
 const EXPENSE_SPLIT_CACHE_TTL_MS = Number(process.env.EXPENSE_SPLIT_CACHE_TTL_MS || 60 * 1000);
 
 const columnCache = new Map();
-const expenseStatusCache = new Map();
 const approvedExpenseSummaryCache = new Map();
 const expenseSplitCache = new Map();
 
@@ -687,7 +686,7 @@ async function attachExpenseAmounts(records, {
 }
 
 function approvedDetailMonth(item) {
-  return formatUtcMonth(firstNonEmpty(item.source_created_at, item.request_date, item.approval_completed_at));
+  return formatUtcMonth(item.approval_completed_at);
 }
 
 function formatUtcMonth(value) {
@@ -700,201 +699,7 @@ function formatUtcMonth(value) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-const excludedExpenseStatusKeywords = [
-  'reject',
-  'refuse',
-  'cancel',
-  'terminate',
-  '撤销',
-  '取消',
-  '拒绝',
-  '驳回',
-];
-
-function isExcludedExpense(item) {
-  const statusValues = [
-    item.approval_status,
-    item.local_approval_status,
-    item.live_approval_status,
-    item.live_status,
-    item.flow_status,
-    item.status,
-    item.biz_action,
-    item.live_biz_action,
-    item.result,
-    item.live_result,
-    item.approval_result,
-    item.approve_result,
-    item.process_result,
-    item.process_status,
-    item.cashier_status,
-    item.cashier_result,
-    item.local_cashier_status,
-    item.local_cashier_result,
-  ];
-
-  return statusValues.some((value) => {
-    const text = String(value || '').trim().toLowerCase();
-    if (!text) return false;
-    return excludedExpenseStatusKeywords.some((keyword) => text.includes(keyword));
-  });
-}
-
-function needsLiveExpenseStatus(item) {
-  if (!VERIFY_EXPENSE_STATUS_WITH_DINGTALK) return false;
-  if (isExcludedExpense(item)) return false;
-  if (!item.process_instance_id) return false;
-  if (item.approval_completed_at) return false;
-
-  const statusText = [
-    item.approval_status,
-    item.local_approval_status,
-    item.flow_status,
-    item.status,
-    item.biz_action,
-    item.result,
-    item.approval_result,
-    item.process_status,
-  ].filter(Boolean).join(' ').toLowerCase();
-
-  const resultText = String(firstNonEmpty(
-    item.result,
-    item.approval_result,
-    item.approve_result,
-    item.process_result
-  ) || '').trim().toLowerCase();
-  const isClearlyAgreed = resultText === 'agree' ||
-    resultText === 'approved' ||
-    resultText === 'pass' ||
-    resultText === 'success' ||
-    resultText.includes('同意') ||
-    resultText.includes('通过');
-  if (isClearlyAgreed) return false;
-
-  return statusText.includes('running') ||
-    statusText.includes('pending') ||
-    statusText.includes('process') ||
-    statusText.includes('审批中') ||
-    statusText.includes('处理中');
-}
-
-async function mapLimit(items, limit, mapper) {
-  const results = [];
-  let nextIndex = 0;
-  const workerCount = Math.max(1, Math.min(limit || 1, items.length || 1));
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-function getCachedExpenseStatus(processInstanceId) {
-  const cached = expenseStatusCache.get(processInstanceId);
-  if (!cached) return null;
-  if (Date.now() - cached.cachedAt > EXPENSE_STATUS_CACHE_TTL_MS) {
-    expenseStatusCache.delete(processInstanceId);
-    return null;
-  }
-  return cached.value;
-}
-
-async function getLiveExpenseStatus(processInstanceId) {
-  const cached = getCachedExpenseStatus(processInstanceId);
-  if (cached) return cached;
-
-  try {
-    const detail = await getProcessInstanceDetail(processInstanceId);
-    const value = {
-      live_approval_status: detail?.status || '',
-      live_status: detail?.status || '',
-      live_result: detail?.result || '',
-      live_biz_action: detail?.bizAction || detail?.biz_action || '',
-      live_finish_time: detail?.finishTime || detail?.finish_time || '',
-    };
-    expenseStatusCache.set(processInstanceId, { cachedAt: Date.now(), value });
-    return value;
-  } catch (error) {
-    console.warn(`[WARN] Live DingTalk expense status unavailable for ${processInstanceId}: ${error.message}`);
-    return null;
-  }
-}
-
-async function applyLiveExpenseStatuses(items, warnings) {
-  const candidates = [];
-  const seen = new Set();
-
-  for (const item of items) {
-    if (!needsLiveExpenseStatus(item)) continue;
-    const processInstanceId = String(item.process_instance_id || '').trim();
-    if (!processInstanceId || seen.has(processInstanceId)) continue;
-    seen.add(processInstanceId);
-    candidates.push(processInstanceId);
-  }
-
-  if (candidates.length === 0) return items;
-
-  const limitedCandidates = candidates.slice(0, EXPENSE_STATUS_VERIFY_LIMIT);
-  if (limitedCandidates.length < candidates.length) {
-    warnings.push(`有 ${candidates.length - limitedCandidates.length} 条审批中支出未做实时状态校验`);
-  }
-
-  const statuses = await mapLimit(limitedCandidates, EXPENSE_STATUS_VERIFY_CONCURRENCY, async (processInstanceId) => [
-    processInstanceId,
-    await getLiveExpenseStatus(processInstanceId),
-  ]);
-  const statusMap = new Map(statuses.filter(([, status]) => status));
-
-  return items.map((item) => {
-    const processInstanceId = String(item.process_instance_id || '').trim();
-    const liveStatus = statusMap.get(processInstanceId) || getCachedExpenseStatus(processInstanceId);
-    return liveStatus ? { ...item, ...liveStatus } : item;
-  });
-}
-
 /** 从支出记录的 JSONB 拆分列中提取各部门明细金额（原始币种） */
-const approvedExpenseStatusKeywords = [
-  'completed',
-  'running',        // 钉钉审批流大量已通过记录 approval_status 仍为 RUNNING，未被驳回/终止即视为有效
-  'approved',
-  'agree',
-  'pass',
-  'done',
-  'finish',
-  'success',
-  '已通过',
-  '已完成',
-  '同意',
-  '通过',
-  '完成',
-];
-
-function isApprovedExpense(item) {
-  if (isExcludedExpense(item)) return false;
-  if (item.approval_completed_at) return true;
-
-  const statusValues = [
-    item.approval_status,
-    item.flow_status,
-    item.status,
-    item.biz_action,
-    item.result,
-    item.approval_result,
-    item.approve_result,
-    item.process_result,
-    item.process_status,
-  ];
-
-  return statusValues.some((value) => {
-    const text = String(value || '').trim().toLowerCase();
-    if (!text) return false;
-    return approvedExpenseStatusKeywords.some((keyword) => text.includes(String(keyword).toLowerCase()));
-  });
-}
 
 function extractDeptSplitEntries(item) {
   const entries = [];
@@ -1173,8 +978,8 @@ function expandMonthDate(value, isEndDate = false) {
   return `${match[1]}-${match[2]}-01`;
 }
 
-function approvalExpenseDateExpr(alias) {
-  return `((` + `${alias}.source_created_at AT TIME ZONE 'UTC')::date)`;
+export function approvalExpenseDateExpr(alias) {
+  return `((` + `${alias}.approval_completed_at AT TIME ZONE 'UTC')::date)`;
 }
 
 async function fetchApprovalExpenseDetails(dateRange) {
@@ -1185,7 +990,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
   const endParam = endDate ? params.push(endDate) : null;
 
   const dateWhereFor = (alias) => {
-    const dateExpr = `COALESCE(${approvalExpenseDateExpr(alias)}, ${alias}.request_date, (${alias}.approval_completed_at AT TIME ZONE 'UTC')::date)`;
+    const dateExpr = approvalExpenseDateExpr(alias);
     let whereClause = 'WHERE 1=1';
     if (startParam) whereClause += ` AND ${dateExpr} >= $${startParam}::date`;
     if (endParam) whereClause += ` AND ${dateExpr} <= $${endParam}::date`;
@@ -1221,11 +1026,8 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.updated_at,
         o.approval_completed_at,
         o.approval_status,
-        o.cashier_status,
-        o.cashier_result,
         o.raw_data->>'status' AS status,
-        o.raw_data->>'bizAction' AS biz_action,
-        o.raw_data->>'result' AS result,
+        ${completedApprovalResultSql('o')} AS result,
         o.raw_data->>'title' AS title,
         o.expense_type,
         o.operation_expense,
@@ -1240,6 +1042,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.base_currency_amount
       FROM approval_expense_operation o
       ${dateWhereFor('o')}
+      ${completedApprovedExpenseWhere('o')}
       UNION ALL
       SELECT
         'purchase'::text AS expense_kind,
@@ -1258,11 +1061,8 @@ async function fetchApprovalExpenseDetails(dateRange) {
         p.updated_at,
         p.approval_completed_at,
         p.approval_status,
-        p.cashier_status,
-        p.cashier_result,
         p.raw_data->>'status' AS status,
-        p.raw_data->>'bizAction' AS biz_action,
-        p.raw_data->>'result' AS result,
+        ${completedApprovalResultSql('p')} AS result,
         p.raw_data->>'title' AS title,
         p.purchase_expense AS expense_type,
         NULL::varchar AS operation_expense,
@@ -1277,6 +1077,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         p.base_currency_amount
       FROM approval_expense_purchase p
       ${dateWhereFor('p')}
+      ${completedApprovedExpenseWhere('p')}
     `, params);
     return result.rows;
   } finally {
@@ -1288,7 +1089,7 @@ function expenseSummaryCacheKey(dateRange) {
   return [
     expandMonthDate(dateRange.startDate, false) || '',
     expandMonthDate(dateRange.endDate, true) || '',
-    VERIFY_EXPENSE_STATUS_WITH_DINGTALK ? 'live' : 'db',
+    'completed-approval',
   ].join('__');
 }
 
@@ -1297,16 +1098,15 @@ async function fetchApprovedExpenseSummaryFresh(dateRange) {
   const detailMap = new Map();
 
   try {
-    const rawDetails = (await fetchApprovalExpenseDetails(dateRange)).filter((item) => !isExcludedExpense(item));
-    const verifiedDetails = await applyLiveExpenseStatuses(rawDetails, warnings);
+    const verifiedDetails = (await fetchApprovalExpenseDetails(dateRange)).filter(isCompletedApprovedExpense);
 
-    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'operation' && !isExcludedExpense(e))) {
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'operation' && isCompletedApprovedExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, query_month: queryMonth });
     }
 
-    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'purchase' && !isExcludedExpense(e))) {
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'purchase' && isCompletedApprovedExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, query_month: queryMonth });
@@ -1850,7 +1650,6 @@ router.get('/report', async (req, res) => {
 });
 
 export {
-  approvalExpenseDateExpr,
   applyExpenseDetailReportingOverlay,
   attachExpenseAmounts,
   buildBudgetWhere,
