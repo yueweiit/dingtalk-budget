@@ -1093,56 +1093,12 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
 
   // --- 可视化报表数据 sheet ---
 
-  // 1. 部门预算分布（Top 12）
-  const deptBudgetMap = new Map();
-  for (const row of productionRows) {
-    if (isSharedBudgetChild(row)) continue;
-    const dept = departmentDisplayName(row);
-    const key = departmentIdentityKey(row);
-    const amt = toAmount(row.requestAmount);
-    const cur = deptBudgetMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
-    cur.production += amt;
-    deptBudgetMap.set(key, cur);
-  }
-  for (const row of operationRows) {
-    if (isSharedBudgetChild(row)) continue;
-    const dept = departmentDisplayName(row);
-    const key = departmentIdentityKey(row);
-    const amt = toAmount(row.amount);
-    const cur = deptBudgetMap.get(key) || { deptName: dept, departmentIdentityKey: key, production: 0, nonProduction: 0 };
-    cur.nonProduction += amt;
-    deptBudgetMap.set(key, cur);
-  }
-  const deptBudgetRows = [...deptBudgetMap.values()]
-    .sort((a, b) => (b.production + b.nonProduction) - (a.production + a.nonProduction))
-    .slice(0, 12);
-
-  // 2. 2026年月度预算趋势
-  const monthTrendMap = new Map();
-  for (const row of productionRows) {
-    if (isSharedBudgetChild(row)) continue;
-    const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
-    const cur = monthTrendMap.get(month) || { month, production: 0, nonProduction: 0 };
-    cur.production += toAmount(row.requestAmount);
-    monthTrendMap.set(month, cur);
-  }
-  for (const row of operationRows) {
-    if (isSharedBudgetChild(row)) continue;
-    const month = (row.budgetMonth || formatMonth(row.createTime || row.applicationDate) || '未知').trim();
-    const cur = monthTrendMap.get(month) || { month, production: 0, nonProduction: 0 };
-    cur.nonProduction += toAmount(row.amount);
-    monthTrendMap.set(month, cur);
-  }
-  const trendRows = [...monthTrendMap.values()]
-    .map((item) => ({ ...item, total: item.production + item.nonProduction }))
-    .sort((a, b) => String(a.month).localeCompare(String(b.month)));
-
-  // 3. 预算类型占比（生产 vs 非生产）
+  // 预算类型占比（生产 vs 非生产）
   const productionGrandTotal = productionRows.reduce((s, r) => s + budgetAmountForTotals(r, r.requestAmount), 0);
   const nonProductionGrandTotal = operationRows.reduce((s, r) => s + budgetAmountForTotals(r, r.amount), 0);
   const grandTotal = productionGrandTotal + nonProductionGrandTotal;
 
-  // 4. 部门执行率（Top 10）
+  // 部门执行率（Top 10）
   const execRateRows = executionRows
     .map((r) => ({
       deptName: r.deptName,
@@ -1157,41 +1113,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     .sort((a, b) => b.executionRate - a.executionRate)
     .slice(0, 10);
 
-  // 5. 部门预算 vs 支出对比（Top 10）
-  const deptCompRows = executionRows
-    .map((r) => ({
-      deptName: r.deptName,
-      budgetMonth: r.budgetMonth,
-      budget: toAmount(r.totalBudget),
-      approved: toAmount(r.totalApproved),
-      remaining: toAmount(r.remainingBudget),
-    }))
-    .sort((a, b) => b.budget - a.budget)
-    .slice(0, 10);
-
   // --- 构建 sheet rows ---
-
-  const deptBudgetSheetRows = [
-    ['序号', '部门', '生产预算金额', '非生产预算金额', '预算合计'],
-    ...deptBudgetRows.map((r, i) => [
-      i + 1,
-      r.deptName,
-      r.production.toFixed(2),
-      r.nonProduction.toFixed(2),
-      (r.production + r.nonProduction).toFixed(2),
-    ]),
-  ];
-
-  const trendSheetRows = [
-    ['序号', '预算月份', '生产预算金额', '非生产预算金额', '预算合计'],
-    ...trendRows.map((r, i) => [
-      i + 1,
-      r.month,
-      r.production.toFixed(2),
-      r.nonProduction.toFixed(2),
-      r.total.toFixed(2),
-    ]),
-  ];
 
   const typeDistributionSheetRows = [
     ['预算类型', '金额', '占比'],
@@ -1299,49 +1221,26 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ]),
   ];
 
-  const deptCompSheetRows = [
-    ['序号', '所属部门', '预算月份', '预算金额', '实际支出', '剩余额度'],
-    ...deptCompRows.map((r, i) => [
-      i + 1,
-      r.deptName,
-      r.budgetMonth,
-      r.budget.toFixed(2),
-      r.approved.toFixed(2),
-      r.remaining.toFixed(2),
-    ]),
-  ];
-
   // ── Charts: define which sheets get embedded charts ────────────────────
 
-  const deptBudgetRowCount = deptBudgetRows.length + 1;
-  const trendRowCount = trendRows.length + 1;
   const execRateRowCount = execRateRows.length + 1;
-  const deptCompRowCount = deptCompRows.length + 1;
 
   // Sheet index (1-based) → chart definition
   const chartDefs = [
-    { sheetIndex: 3, sheetName: '部门预算分布', chart: barChartXml({ sheetName: '部门预算分布', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }], rowCount: deptBudgetRowCount, title: '各部门预算分布', grouping: 'clustered' }) },
-    { sheetIndex: 4, sheetName: '2026年月度预算趋势', chart: lineChartXml({ sheetName: '2026年月度预算趋势', labelCol: 'B', series: [{ col: 'C' }, { col: 'D' }, { col: 'E' }], rowCount: trendRowCount, title: '2026年月度预算趋势' }) },
-    { sheetIndex: 5, sheetName: '预算类型占比', chart: pieChartXml({ sheetName: '预算类型占比', labelCol: 'A', valueCol: 'B', rowCount: 4, title: '预算类型占比' }) },
-    { sheetIndex: 6, sheetName: '部门执行率', chart: barChartXml({ sheetName: '部门执行率', labelCol: 'B', series: [{ col: 'G' }], rowCount: execRateRowCount, title: '各部门执行率', grouping: 'clustered', barDir: 'bar' }) },
-    { sheetIndex: 7, sheetName: '预算vs支出', chart: barChartXml({ sheetName: '预算vs支出', labelCol: 'B', series: [{ col: 'D' }, { col: 'E' }], rowCount: deptCompRowCount, title: '预算 vs 实际支出', grouping: 'clustered' }) },
+    { sheetIndex: 4, sheetName: '预算类型占比', chart: pieChartXml({ sheetName: '预算类型占比', labelCol: 'A', valueCol: 'B', rowCount: 4, title: '预算类型占比' }) },
+    { sheetIndex: 5, sheetName: '部门执行率', chart: barChartXml({ sheetName: '部门执行率', labelCol: 'B', series: [{ col: 'G' }], rowCount: execRateRowCount, title: '各部门执行率', grouping: 'clustered', barDir: 'bar' }) },
   ];
 
   const sheets = [
     { name: '汇总', rows: summarySheetRows, widths: [28, 18] },
-    { name: '预算执行', rows: executionSheetRows, widths: [8, 28, 14, 16, 18, 16, 18, 18, 18, 18, 14, 16, 16] },
-    { name: '部门预算分布', rows: deptBudgetSheetRows, widths: [8, 28, 18, 18, 18] },
     { name: '地区预算分布', rows: regionSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '执行状态分布', rows: execStatusSheetRows, widths: [8, 28, 18, 18, 18, 18] },
-    { name: '2026年月度预算趋势', rows: trendSheetRows, widths: [8, 14, 18, 18, 18] },
     { name: '预算类型占比', rows: typeDistributionSheetRows, widths: [18, 18, 14] },
     { name: '部门执行率', rows: execRateSheetRows, widths: [8, 28, 14, 18, 18, 18, 12] },
-    { name: '预算vs支出', rows: deptCompSheetRows, widths: [8, 28, 14, 18, 18, 18] },
     { name: '部门预算占比', rows: budgetShareSheetRows, widths: [8, 28, 14, 18, 28, 16, 18, 12, 10] },
     { name: '部门支出占比', rows: expenseShareSheetRows, widths: [8, 28, 14, 14, 40, 18, 20, 12, 10] },
     { name: '实际支出明细', rows: approvedDetailSheetRows, widths: [8, 12, 28, 14, 24, 36, 14, 18, 14, 14, 14, 16, 14] },
     { name: '非生产预算明细', rows: operationSheetRows, widths: [8, 22, 16, 14, 14, 18, 14, 10, 24, 14, 34, 22, 14, 14] },
-    { name: '生产预算明细', rows: productionSheetRows, widths: [8, 22, 14, 14, 14, 16, 16, 24, 22, 10, 12, 14, 14, 16, 16, 16, 16, 16, 26, 14, 24, 22] },
   ];
 
   const chartSet = new Set(chartDefs.map((d) => d.sheetIndex));
