@@ -16,7 +16,14 @@ test('connector query filters a department ID with an exact database predicate',
 });
 
 test('connector query supports the department ID aliases used by DingTalk', () => {
-  for (const key of ['departmentId', 'department_id', 'dept_id']) {
+  for (const key of [
+    'departmentId',
+    'department_id',
+    'deptId',
+    'dept_id',
+    'deptNameID',
+    '部门Id',
+  ]) {
     assert.deepEqual(buildConnectorDepartmentFilter({ [key]: 'dept-100' }, 1), {
       condition: 'dept_id = $1',
       mode: 'id',

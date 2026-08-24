@@ -12,6 +12,10 @@ export function buildConnectorDepartmentFilter(query, paramIndex) {
     'department_id',
     'deptId',
     'dept_id',
+    // Existing DingTalk connectors serialize the displayed "部门Id" parameter
+    // as deptNameID. Its value is still the service-entity department code.
+    'deptNameID',
+    '部门Id',
   ]);
   if (departmentId) {
     return {
