@@ -172,10 +172,9 @@ router.get('/querySimple', async (req, res) => {
           department: req.query.department || req.query.deptName || req.query['\u90e8\u95e8'] || '',
           resolution: resolvedDepartment.status,
         });
-        return res.status(422).json({
-          success: false,
-          message: '请传入部门 ID 或完整部门名称',
-        });
+        // DingTalk invokes the connector while dependent form values are still settling.
+        // Return a safe zero value instead of surfacing the transient state as an error.
+        return res.json({ budgetAmount: '0' });
       }
 
       // 优先按连接器传入的部门 ID 精确查询；没有 ID 时按完整部门名称精确兜底。
