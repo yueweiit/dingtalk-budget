@@ -13,7 +13,7 @@ import {
   getBudgetType,
   isBudgetRequest,
 } from '../services/parser.js';
-import { getDepartmentSnapshot } from '../services/department-tree.js';
+import { getDepartmentSnapshot, resolveServiceEntityDepartment } from '../services/department-tree.js';
 import { query, pool } from '../db/index.js';
 import { assertValidTable } from '../utils/db.js';
 
@@ -136,7 +136,35 @@ export function buildBudgetUpdateValues(processInstanceId, budget, formNo, budge
   ];
 }
 
-async function enrichBudgetDepartmentSnapshot(budget) {
+export async function enrichBudgetDepartmentSnapshot(
+  budget,
+  departmentResolver = resolveServiceEntityDepartment,
+) {
+  if (budget.service_entity_expected) {
+    const resolved = await departmentResolver({
+      serviceEntity: budget.service_entity,
+      serviceEntityCode: budget.service_entity_code,
+      correspondingDepartment: budget.corresponding_department,
+    });
+    if (resolved.status !== 'resolved') {
+      return {
+        ...budget,
+        dept_id: null,
+        dept_name: null,
+        dept_source: 'service_entity_unresolved',
+        dept_path_ids: null,
+        dept_path_names: null,
+      };
+    }
+    return {
+      ...budget,
+      dept_id: resolved.departmentId,
+      dept_name: resolved.department,
+      dept_source: 'service_entity_exact',
+      dept_path_ids: resolved.departmentPathIds || null,
+      dept_path_names: resolved.departmentPathNames || null,
+    };
+  }
   if (!budget.dept_id) return budget;
   return applyBudgetDepartmentSnapshot(
     budget,

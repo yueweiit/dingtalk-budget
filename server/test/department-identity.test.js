@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   getDepartmentIdentity,
+  getServiceEntityRoutingInput,
   parseNonProductionBudget,
   parseProductionBudget,
 } from '../services/parser.js';
@@ -23,7 +24,7 @@ function detailWithDepartment(departmentField, overrides = {}) {
 
 test('prefers the DepartmentField ID for budget department identity', () => {
   const detail = detailWithDepartment({
-    name: 'Departamento',
+    name: '申请部门/组织 Departamento Solicitante',
     componentType: 'DepartmentField',
     value: 'Form Department',
     extendValue: JSON.stringify([{ id: 'form-dept-id', name: 'Form Department' }]),
@@ -37,7 +38,7 @@ test('prefers the DepartmentField ID for budget department identity', () => {
 
 test('uses the originator department ID when the DepartmentField has no ID', () => {
   const detail = detailWithDepartment({
-    name: 'Departamento',
+    name: '申请部门/组织 Departamento Solicitante',
     componentType: 'DepartmentField',
     value: 'Form Department',
     extendValue: JSON.stringify([{ name: 'Form Department' }]),
@@ -51,7 +52,7 @@ test('uses the originator department ID when the DepartmentField has no ID', () 
 
 test('marks a budget as name-only when no department ID is available', () => {
   const detail = detailWithDepartment({
-    name: 'Departamento',
+    name: '申请部门/组织 Departamento Solicitante',
     componentType: 'DepartmentField',
     value: 'Form Department',
   }, {
@@ -66,7 +67,7 @@ test('marks a budget as name-only when no department ID is available', () => {
 
 test('production and non-production budget parsers retain department identity fields', () => {
   const detail = detailWithDepartment({
-    name: 'Departamento',
+    name: '申请部门/组织 Departamento Solicitante',
     componentType: 'DepartmentField',
     value: 'Form Department',
     extendValue: JSON.stringify([{ deptId: 'form-dept-id', name: 'Form Department' }]),
@@ -79,4 +80,39 @@ test('production and non-production budget parsers retain department identity fi
     assert.equal(budget.dept_path_ids, null);
     assert.equal(budget.dept_path_names, null);
   }
+});
+
+test('不把其他 DepartmentField 误认为旧申请部门', () => {
+  const detail = detailWithDepartment({
+    name: '工资拆分部门',
+    componentType: 'DepartmentField',
+    value: '工资部门',
+    extendValue: JSON.stringify([{ id: 'salary-dept-id' }]),
+  });
+
+  assert.deepEqual(getDepartmentIdentity(detail), {
+    dept_id: 'originator-dept-id',
+    dept_source: 'originator_id',
+  });
+});
+
+test('服务主体多层选择读取编码和对应部门，不读取旧申请部门', () => {
+  const routing = getServiceEntityRoutingInput({
+    formComponentValues: [
+      {
+        name: '服务主体Cliente',
+        componentType: 'DDCascadeField',
+        value: 'YUEWEI MX核心制造/PG生产',
+        extValue: JSON.stringify({ code: '1092705940', name: 'PG生产' }),
+      },
+      { name: '对应部门', componentType: 'TextField', value: 'PG生产' },
+    ],
+  });
+
+  assert.deepEqual(routing, {
+    service_entity_expected: true,
+    service_entity: 'PG生产',
+    service_entity_code: '1092705940',
+    corresponding_department: 'PG生产',
+  });
 });

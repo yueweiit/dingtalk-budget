@@ -37,6 +37,21 @@ function parseExtValue(field) {
   return parseJson(field?.extValue ?? field?.extendValue, null);
 }
 
+const LEGACY_APPLICANT_DEPARTMENT_FIELD_NAMES = new Set([
+  '申请部门/组织 Departamento Solicitante',
+  '申请部门Departamento Solicitante',
+  '申请部门',
+]);
+const SERVICE_ENTITY_FIELD_NAMES = new Set(['服务主体Cliente', '服务主体']);
+const CORRESPONDING_DEPARTMENT_FIELD_NAMES = new Set([
+  '对应部门',
+  '对应的部门',
+  '对应部门Departamento correspondiente',
+  '对应的部门Departamento correspondiente',
+  '所属部门',
+  '所属部门Departamento al que pertenece',
+]);
+
 function parseSelectLabel(value, extValue) {
   const ext = typeof extValue === 'string' ? parseJson(extValue, null) : extValue;
   if (Array.isArray(ext)) return ext.map((item) => item?.label || item?.name || item?.value).filter(Boolean).join(',');
@@ -76,12 +91,35 @@ function getFormValue(formValues, keywords) {
 function getDepartmentField(formValues) {
   return formValues.find((field) => {
     if (field.componentType !== 'DepartmentField') return false;
-    const name = textOf(field.name);
-    const id = textOf(field.id);
-    return ['部门', 'Departamento'].some((keyword) =>
-      name === keyword || id === keyword || includesAny(name, [keyword])
-    );
+    return LEGACY_APPLICANT_DEPARTMENT_FIELD_NAMES.has(textOf(field.name).trim());
   });
+}
+
+function getDepartmentFieldValue(field) {
+  if (!field) return null;
+  return parseSelectLabel(field.value, parseExtValue(field)) || null;
+}
+
+function getFieldByNames(formValues, names) {
+  return formValues.find((field) => names.has(textOf(field?.name).trim()));
+}
+
+function extractServiceEntityCode(field) {
+  const extValue = parseExtValue(field);
+  const value = Array.isArray(extValue) ? extValue[extValue.length - 1] : extValue;
+  return textOf(value?.code).trim() || null;
+}
+
+export function getServiceEntityRoutingInput(dingtalkData) {
+  const formValues = dingtalkData.formComponentValues || [];
+  const serviceEntityField = getFieldByNames(formValues, SERVICE_ENTITY_FIELD_NAMES);
+  const correspondingDepartmentField = getFieldByNames(formValues, CORRESPONDING_DEPARTMENT_FIELD_NAMES);
+  return {
+    service_entity_expected: Boolean(serviceEntityField),
+    service_entity: getDepartmentFieldValue(serviceEntityField),
+    service_entity_code: extractServiceEntityCode(serviceEntityField),
+    corresponding_department: getDepartmentFieldValue(correspondingDepartmentField),
+  };
 }
 
 function getDepartmentId(extValue) {
@@ -302,6 +340,8 @@ export function getBudgetType(dingtalkData) {
 function parseBaseBudget(dingtalkData, budgetType) {
   const formValues = dingtalkData.formComponentValues || [];
   const departmentIdentity = getDepartmentIdentity(dingtalkData);
+  const legacyDepartmentField = getDepartmentField(formValues);
+  const serviceEntityRouting = getServiceEntityRoutingInput(dingtalkData);
   const budgetMonth = getFormValue(formValues, ['预算月份', 'Mes presupuestario', '填报月份', 'Mes de declaración']);
   const applicationDate = getFormValue(formValues, ['申请日期', 'Fecha de solicitud', '填报日期', 'Fecha de llenado']);
   // 诊断：打印所有表单字段名，便于排查金额提取问题
@@ -317,8 +357,9 @@ function parseBaseBudget(dingtalkData, budgetType) {
   return {
     form_no: dingtalkData.businessId,
     process_instance_id: dingtalkData.processInstanceId,
-    dept_name: getFormValue(formValues, ['部门', 'Departamento']) || dingtalkData.originatorDeptName,
+    dept_name: getDepartmentFieldValue(legacyDepartmentField) || dingtalkData.originatorDeptName,
     ...departmentIdentity,
+    ...serviceEntityRouting,
     dept_path_ids: null,
     dept_path_names: null,
     budget_type: budgetType,

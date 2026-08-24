@@ -57,6 +57,51 @@ export async function getDepartmentSnapshot(departmentId) {
   }
 }
 
-export function getOaDatabaseQuery() {
-  return oaPool.query.bind(oaPool);
+function text(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+function pickUniqueDepartment(rows) {
+  const candidates = new Map();
+  for (const row of rows) {
+    const departmentId = text(row.dept_id);
+    const department = text(row.name);
+    if (departmentId && department) candidates.set(departmentId, row);
+  }
+  return candidates.size === 1 ? [...candidates.values()][0] : null;
+}
+
+export async function resolveServiceEntityDepartment(input, query = oaPool.query.bind(oaPool)) {
+  const serviceEntity = text(input?.serviceEntity);
+  const serviceEntityCode = text(input?.serviceEntityCode);
+  const correspondingDepartment = text(input?.correspondingDepartment);
+  if (!serviceEntity && !serviceEntityCode) return { status: 'unresolved' };
+
+  const result = await query(`
+    SELECT dept_id, name, path_ids, path_names, is_current
+    FROM ding_department_tree
+    WHERE NULLIF(BTRIM(dept_id), '') IS NOT NULL
+      AND (
+        (NULLIF($3::text, '') IS NOT NULL AND BTRIM(dept_id) = $3::text)
+        OR (
+          NULLIF($3::text, '') IS NULL
+          AND (
+            (NULLIF($2::text, '') IS NOT NULL AND BTRIM(name) = $2::text
+              AND jsonb_typeof(path_names) = 'array' AND path_names @> jsonb_build_array($1::text))
+            OR (NULLIF($2::text, '') IS NULL AND BTRIM(name) = $1::text)
+          )
+        )
+      )
+  `, [serviceEntity, correspondingDepartment, serviceEntityCode]);
+  const selected = pickUniqueDepartment(result.rows.filter((row) => row.is_current === true));
+  if (!selected) return { status: 'unresolved' };
+
+  return {
+    status: 'resolved',
+    department: text(selected.name),
+    departmentId: text(selected.dept_id),
+    departmentPathIds: selected.path_ids || null,
+    departmentPathNames: selected.path_names || null,
+  };
 }

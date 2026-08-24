@@ -1,11 +1,6 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { buildConnectorDepartmentFilter } from '../services/connector-department-query.js';
-import { getOaDatabaseQuery } from '../services/department-tree.js';
-import {
-  getConnectorOriginator,
-  resolveOriginatorDepartment,
-} from '../services/connector-originator-department.js';
 import { sharedBudgetRollupDepartment } from '../services/yw-tech-shared-budget.js';
 import { assertValidTable } from '../utils/db.js';
 
@@ -110,18 +105,14 @@ export function resolveTableName(type) {
   return 'production_budget';
 }
 
-async function resolveConnectorBudgetDepartment(queryParams, month) {
-  const initialFilter = buildConnectorDepartmentFilter(queryParams, 1);
-  if (!initialFilter) {
-    return {
-      status: 'ready',
-      departmentId: '',
-      legacyFilter: initialFilter,
-    };
+export async function resolveConnectorBudgetDepartment(queryParams, month) {
+  const departmentFilter = buildConnectorDepartmentFilter(queryParams, 1);
+  if (!departmentFilter) {
+    return { status: 'missing_department' };
   }
 
-  if (initialFilter.mode === 'id') {
-    const departmentId = initialFilter.params[0];
+  if (departmentFilter.mode === 'id') {
+    const departmentId = departmentFilter.params[0];
     const sharedBudgetDepartment = sharedBudgetRollupDepartment({ dept_id: departmentId }, month);
     return {
       status: 'ready',
@@ -129,30 +120,10 @@ async function resolveConnectorBudgetDepartment(queryParams, month) {
     };
   }
 
-  const originator = getConnectorOriginator(queryParams);
-  if (!originator.userId && !originator.name) {
-    return { status: 'ready', departmentId: '', legacyFilter: initialFilter };
-  }
-
-  const resolution = await resolveOriginatorDepartment({
-    originatorUserId: originator.userId,
-    originatorName: originator.name,
-    departmentName: initialFilter.params[0],
-    sharedBudgetMonth: month,
-  }, getOaDatabaseQuery());
-
-  if (resolution.status !== 'resolved') {
-    return { status: resolution.status, resolution };
-  }
-
-  const sharedBudgetDepartment = sharedBudgetRollupDepartment(
-    { dept_id: resolution.departmentId },
-    month
-  );
   return {
     status: 'ready',
-    departmentId: sharedBudgetDepartment?.department_id || resolution.departmentId,
-    resolution,
+    departmentId: '',
+    legacyFilter: departmentFilter,
   };
 }
 
@@ -199,21 +170,15 @@ router.get('/querySimple', async (req, res) => {
         console.warn('[connector] department resolution failed', {
           queryKeys: Object.keys(req.query),
           department: req.query.department || req.query.deptName || req.query['\u90e8\u95e8'] || '',
-          originator: getConnectorOriginator(req.query),
           resolution: resolvedDepartment.status,
-          candidateCount: resolvedDepartment.resolution?.status === 'ambiguous'
-            ? resolvedDepartment.resolution.candidates.length
-            : 0,
         });
         return res.status(422).json({
           success: false,
-          message: resolvedDepartment.status === 'ambiguous'
-            ? '部门归属不唯一，请配置提交人对应的部门'
-            : '未找到提交人与部门的对应关系，请检查组织架构同步',
+          message: '请传入部门 ID 或完整部门名称',
         });
       }
 
-      // 连接器传入部门 ID 或能由提交人唯一解析时，按真实部门 ID 精确查询。
+      // 优先按连接器传入的部门 ID 精确查询；没有 ID 时按完整部门名称精确兜底。
       const departmentFilter = resolvedDepartment.departmentId
         ? buildConnectorDepartmentFilter({ departmentId: resolvedDepartment.departmentId }, paramIndex)
         : resolvedDepartment.legacyFilter;

@@ -1,7 +1,7 @@
 import { config as loadEnv } from 'dotenv';
 import pg from 'pg';
 
-import { buildDepartmentSnapshotQuery } from '../services/department-tree.js';
+import { buildDepartmentSnapshotQuery, resolveServiceEntityDepartment } from '../services/department-tree.js';
 import {
   buildDepartmentIdentityUpdate,
   resolveBudgetDepartmentBackfill,
@@ -134,11 +134,18 @@ async function main() {
         continue;
       }
 
-      const preview = resolveBudgetDepartmentBackfill(candidate, sourceRowsForInstance[0]);
+      const resolveServiceEntity = (input) => resolveServiceEntityDepartment(input, oaClient.query.bind(oaClient));
+      const preview = await resolveBudgetDepartmentBackfill(candidate, sourceRowsForInstance[0], {
+        resolveServiceEntityDepartment: resolveServiceEntity,
+      });
       const snapshot = preview.action === 'update'
+        && !preview.dept_path_ids
         ? await loadDepartmentSnapshot(oaClient, preview.dept_id, snapshotCache)
         : null;
-      results.push(resolveBudgetDepartmentBackfill(candidate, sourceRowsForInstance[0], snapshot));
+      results.push(await resolveBudgetDepartmentBackfill(candidate, sourceRowsForInstance[0], {
+        snapshot,
+        resolveServiceEntityDepartment: resolveServiceEntity,
+      }));
     }
 
     const updates = results.filter((item) => item.action === 'update');
