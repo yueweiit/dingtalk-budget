@@ -18,6 +18,7 @@ test('connector query filters a department ID with an exact database predicate',
 test('connector query supports the department ID aliases used by DingTalk', () => {
   for (const key of [
     'departmentId',
+    'departmentID',
     'department_id',
     'deptId',
     'dept_id',

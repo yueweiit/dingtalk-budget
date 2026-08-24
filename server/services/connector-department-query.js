@@ -9,6 +9,7 @@ function firstNonEmptyQueryValue(query, keys) {
 export function buildConnectorDepartmentFilter(query, paramIndex) {
   const departmentId = firstNonEmptyQueryValue(query, [
     'departmentId',
+    'departmentID',
     'department_id',
     'deptId',
     'dept_id',
