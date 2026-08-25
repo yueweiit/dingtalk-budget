@@ -14,6 +14,14 @@ import { expenseDetailSplitRecord } from '../utils/expenseDetailSplit.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 import { departmentPathTitle } from '../utils/departmentPath.js';
 import { shouldDisplayBudgetListAmounts } from '../utils/budgetList.js';
+import {
+  buildPaymentCountMap,
+  buildPaymentSequenceMap,
+  paymentEventDate,
+  paymentEventEvidence,
+  paymentEventKey,
+  paymentEventLabel,
+} from '../utils/paymentEventDisplay.js';
 
 const styles = {
   page: {
@@ -411,7 +419,7 @@ function DepartmentPathValue({ record, children }) {
 
 function detailMonthOf(item) {
   if (item?.query_month) return String(item.query_month).trim();
-  const date = firstNonEmpty(item?.approval_completed_at);
+  const date = paymentEventDate(item);
   if (!date) return '';
   return formatUtcMonth(date);
 }
@@ -521,18 +529,25 @@ function extractDetailSplits(item) {
   return rows;
 }
 
-function expenseDetailBase(item) {
+function expenseDetailBase(item, paymentSequence = 0, paymentCount = 0) {
+  const isPaymentEvent = item?.accounting_source === 'payment_event';
+  const paymentAmount = toNum(firstNonEmpty(item?.payment_event_amount, item?.amount, item?.detail_summary_amount));
   return {
-    date: firstNonEmpty(item?.approval_completed_at),
+    date: paymentEventDate(item),
     businessId: item?.business_id || '',
     title: item?.title || '',
     description: firstNonEmpty(item?.matter_description, item?.title),
+    paymentEventLabel: paymentEventLabel(item, paymentSequence, paymentCount),
+    paymentEvidence: paymentEventEvidence(item),
+    paymentAmount: isPaymentEvent ? paymentAmount : null,
+    paymentCurrency: isPaymentEvent ? String(item?.payment_event_currency || '') : '',
   };
 }
 
-function directExpenseDetailRow(item, amount, note = '') {
+function directExpenseDetailRow(item, amount, note = '', paymentSequence = 0, paymentCount = 0) {
+  const evidence = paymentEventEvidence(item);
   return {
-    ...expenseDetailBase(item),
+    ...expenseDetailBase(item, paymentSequence, paymentCount),
     amount,
     expenseType: firstNonEmpty(
       item?.purchase_expense,
@@ -540,14 +555,14 @@ function directExpenseDetailRow(item, amount, note = '') {
       item?.expense_type,
       expenseKindLabel(item?.expense_kind)
     ),
-    note,
+    note: evidence ? `${note ? `${note}\uff1a` : ''}${evidence}` : note,
   };
 }
 
-function splitExpenseDetailRow(item, split) {
+function splitExpenseDetailRow(item, split, paymentSequence = 0, paymentCount = 0) {
   const label = splitTypeLabel(split.splitType);
   return {
-    ...expenseDetailBase(item),
+    ...expenseDetailBase(item, paymentSequence, paymentCount),
     amount: split.amount,
     expenseType: label,
     note: firstNonEmpty(split.note, `${label}拆分`),
@@ -570,6 +585,8 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
   };
 
   if ((!targetDepartment.deptName && !targetDepartment.dept_id) || !budgetMonth) return sections;
+  const paymentSequences = buildPaymentSequenceMap(rawDetails);
+  const paymentCounts = buildPaymentCountMap(rawDetails);
 
   for (const item of rawDetails || []) {
     if (detailMonthOf(item) !== budgetMonth) continue;
@@ -579,6 +596,8 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
 
     const directDepartment = detailDepartmentRecord(item);
     const splits = extractDetailSplits(item);
+    const paymentSequence = paymentSequences.get(paymentEventKey(item)) || 0;
+    const paymentCount = paymentCounts.get(item?.business_id) || 0;
 
     if (splits.length > 0) {
       const splitTotal = splits.reduce((sum, split) => sum + toNum(split.amount), 0);
@@ -586,18 +605,18 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
       for (const split of splits) {
         if (!matchesExpenseDetailDepartment(targetDepartment, split)) continue;
         const sectionKey = sectionKeyForSplit(split.splitType);
-        sections[sectionKey].push(splitExpenseDetailRow(item, split));
+        sections[sectionKey].push(splitExpenseDetailRow(item, split, paymentSequence, paymentCount));
       }
 
       const remainder = Number((amount - splitTotal).toFixed(2));
       if (remainder > 0.01 && matchesExpenseDetailDepartment(targetDepartment, directDepartment)) {
-        sections.operationPurchase.push(directExpenseDetailRow(item, remainder, '未拆分余额'));
+        sections.operationPurchase.push(directExpenseDetailRow(item, remainder, '未拆分余额', paymentSequence, paymentCount));
       }
       continue;
     }
 
     if (!matchesExpenseDetailDepartment(targetDepartment, directDepartment)) continue;
-    sections.operationPurchase.push(directExpenseDetailRow(item, amount));
+    sections.operationPurchase.push(directExpenseDetailRow(item, amount, '', paymentSequence, paymentCount));
   }
 
   for (const rows of Object.values(sections)) {
@@ -759,6 +778,7 @@ function ExpenseDetailSection({ title, rows = [] }) {
                 <th style={styles.expenseDetailTh}>支出类型</th>
                 <th style={styles.expenseDetailTh}>事项/说明</th>
                 <th style={{ ...styles.expenseDetailTh, textAlign: 'right' }}>金额</th>
+                <th style={styles.expenseDetailTh}>付款事件</th>
                 <th style={styles.expenseDetailTh}>备注</th>
               </tr>
             </thead>
@@ -770,6 +790,7 @@ function ExpenseDetailSection({ title, rows = [] }) {
                   <td style={{ ...styles.expenseDetailTd, minWidth: 130 }}>{displayValue(row.expenseType)}</td>
                   <td style={{ ...styles.expenseDetailTd, ...styles.expenseDetailText, minWidth: 280 }}>{displayValue(row.description)}</td>
                   <td style={{ ...styles.expenseDetailTd, ...styles.expenseDetailAmount }}>{fmtWan(row.amount)}</td>
+                  <td style={{ ...styles.expenseDetailTd, whiteSpace: 'nowrap' }}>{displayValue(row.paymentEventLabel)}</td>
                   <td style={{ ...styles.expenseDetailTd, ...styles.expenseDetailText, minWidth: 150 }}>{displayValue(row.note)}</td>
                 </tr>
               ))}

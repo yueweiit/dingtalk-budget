@@ -31,6 +31,21 @@ const APPROVAL_DB_DATABASE = process.env.APPROVAL_DB_DATABASE ||
 const APPROVED_EXPENSE_CACHE_TTL_MS = Number(process.env.APPROVED_EXPENSE_CACHE_TTL_MS || 60 * 1000);
 const EXPENSE_SPLIT_CACHE_TTL_MS = Number(process.env.EXPENSE_SPLIT_CACHE_TTL_MS || 60 * 1000);
 
+const DEFAULT_AUTHORIZED_PAYMENT_EVENT_USER_IDS = [
+  '57521312381178275',
+  '02183637680221426194',
+];
+const AUTHORIZED_PAYMENT_EVENT_USER_IDS = Object.freeze(
+  (process.env.DINGTALK_PAYMENT_EVENT_USER_IDS || DEFAULT_AUTHORIZED_PAYMENT_EVENT_USER_IDS.join(','))
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+);
+if (AUTHORIZED_PAYMENT_EVENT_USER_IDS.length === 0) {
+  throw new Error('DINGTALK_PAYMENT_EVENT_USER_IDS must contain at least one user ID');
+}
+const AUTHORIZED_PAYMENT_EVENT_USER_SQL = `event.source_user_id IN (${AUTHORIZED_PAYMENT_EVENT_USER_IDS.map((id) => `'${id}'`).join(', ')})`;
+
 const columnCache = new Map();
 const approvedExpenseSummaryCache = new Map();
 const expenseSplitCache = new Map();
@@ -481,7 +496,8 @@ function embeddedExpenseSplitRows(details) {
 async function attachExpenseSplitsToDetails(details) {
   const rows = Array.isArray(details) ? details : [];
   if (rows.length === 0) return rows;
-  const splitRows = await fetchExpenseDeptSplits(rows);
+  const completedRows = rows.filter((item) => !isPaymentEventExpense(item));
+  const splitRows = await fetchExpenseDeptSplits(completedRows);
   const splitMap = new Map();
 
   for (const row of splitRows) {
@@ -504,7 +520,11 @@ async function attachExpenseSplitsToDetails(details) {
 
   return rows.map((item) => ({
     ...item,
-    expense_splits: splitMap.get(String(item.business_id || '').trim()) || [],
+    // A payment event can be partial. Its comment does not identify the
+    // department split, so safely keep it on the applicant department.
+    expense_splits: isPaymentEventExpense(item)
+      ? []
+      : splitMap.get(String(item.business_id || '').trim()) || [],
   }));
 }
 
@@ -686,7 +706,7 @@ async function attachExpenseAmounts(records, {
 }
 
 function approvedDetailMonth(item) {
-  return formatUtcMonth(item.approval_completed_at);
+  return formatUtcMonth(item.accounting_at || item.approval_completed_at);
 }
 
 function formatUtcMonth(value) {
@@ -982,8 +1002,24 @@ export function approvalExpenseDateExpr(alias) {
   return `((` + `${alias}.approval_completed_at AT TIME ZONE 'UTC')::date)`;
 }
 
-async function fetchApprovalExpenseDetails(dateRange) {
+function paymentEventDateExpr(alias) {
+  return `((` + `${alias}.paid_at AT TIME ZONE 'UTC')::date)`;
+}
+
+function isPaymentEventExpense(item) {
+  return item?.accounting_source === 'payment_event' && Boolean(item?.accounting_at);
+}
+
+function isAccountableExpense(item) {
+  return isPaymentEventExpense(item)
+    || ((item?.accounting_source === 'completed_department_split'
+      || item?.accounting_source === 'completed_approval_fallback')
+      && isCompletedApprovedExpense(item));
+}
+
+export async function fetchApprovalExpenseDetails(dateRange) {
   const params = [];
+  let hasPaymentEventTable = false;
   const startDate = expandMonthDate(dateRange.startDate, false);
   const endDate = expandMonthDate(dateRange.endDate, true);
   const startParam = startDate ? params.push(startDate) : null;
@@ -997,6 +1033,37 @@ async function fetchApprovalExpenseDetails(dateRange) {
     return whereClause;
   };
 
+  const paymentDateWhereFor = (alias) => {
+    const dateExpr = paymentEventDateExpr(alias);
+    let whereClause = 'WHERE 1=1';
+    if (startParam) whereClause += ` AND ${dateExpr} >= $${startParam}::date`;
+    if (endParam) whereClause += ` AND ${dateExpr} <= $${endParam}::date`;
+    return whereClause;
+  };
+
+  const completedDepartmentSplitWhere = (alias) => `${completedApprovedExpenseWhere(alias)}
+    AND EXISTS (
+      SELECT 1
+      FROM approval_expense_dept_split split
+      WHERE split.business_id = ${alias}.business_id
+    )`;
+
+  const completedApprovalFallbackWhere = (alias, hasDepartmentSplit) => `${completedApprovedExpenseWhere(alias)}
+    ${hasDepartmentSplit ? `AND NOT EXISTS (
+      SELECT 1
+      FROM approval_expense_dept_split split
+      WHERE split.business_id = ${alias}.business_id
+    )` : ''}
+    ${hasPaymentEventTable ? `AND NOT EXISTS (
+      SELECT 1
+      FROM approval_expense_payment_events event
+      WHERE event.business_id = ${alias}.business_id
+        AND event.status = 'confirmed'
+        AND event.rule_version = 'authorized-comment-v1'
+        AND event.source_type = 'comment_explicit_amount'
+        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+    )` : ''}`;
+
   const client = new Client({
     host: process.env.PGHOST,
     port: Number(process.env.PGPORT || 5432),
@@ -1008,6 +1075,18 @@ async function fetchApprovalExpenseDetails(dateRange) {
 
   try {
     await client.connect();
+    const capability = await client.query(
+      `SELECT
+         to_regclass('public.approval_expense_payment_events') AS table_name,
+         EXISTS (
+           SELECT 1
+           FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'approval_expense_payment_events'
+             AND column_name = 'rule_version'
+         ) AS has_rule_version`
+    );
+    hasPaymentEventTable = Boolean(capability.rows[0]?.table_name) && Boolean(capability.rows[0]?.has_rule_version);
     const result = await client.query(`
       SELECT
         'operation'::text AS expense_kind,
@@ -1029,6 +1108,14 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.raw_data->>'status' AS status,
         ${completedApprovalResultSql('o')} AS result,
         o.raw_data->>'title' AS title,
+        'completed_department_split'::text AS accounting_source,
+        o.approval_completed_at AS accounting_at,
+        NULL::bigint AS payment_event_id,
+        NULL::timestamptz AS payment_event_paid_at,
+        NULL::numeric AS payment_event_amount,
+        NULL::text AS payment_event_currency,
+        NULL::text AS payment_event_evidence_text,
+        NULL::text AS payment_event_source_user_id,
         o.expense_type,
         o.operation_expense,
         o.employee_benefits_expense,
@@ -1042,7 +1129,150 @@ async function fetchApprovalExpenseDetails(dateRange) {
         o.base_currency_amount
       FROM approval_expense_operation o
       ${dateWhereFor('o')}
-      ${completedApprovedExpenseWhere('o')}
+      ${completedDepartmentSplitWhere('o')}
+      UNION ALL
+      SELECT
+        'operation'::text AS expense_kind,
+        o.business_id,
+        o.process_instance_id,
+        o.request_date,
+        o.execution_region,
+        o.applicant_department,
+        o.applicant_department_id,
+        o.applicant_department_source,
+        o.applicant_department_path_names,
+        o.creator_department,
+        o.applicant_department AS query_department,
+        o.source_created_at,
+        o.source_updated_at,
+        o.updated_at,
+        o.approval_completed_at,
+        o.approval_status,
+        o.raw_data->>'status' AS status,
+        ${completedApprovalResultSql('o')} AS result,
+        o.raw_data->>'title' AS title,
+        'completed_approval_fallback'::text AS accounting_source,
+        o.approval_completed_at AS accounting_at,
+        NULL::bigint AS payment_event_id,
+        NULL::timestamptz AS payment_event_paid_at,
+        NULL::numeric AS payment_event_amount,
+        NULL::text AS payment_event_currency,
+        NULL::text AS payment_event_evidence_text,
+        NULL::text AS payment_event_source_user_id,
+        o.expense_type,
+        o.operation_expense,
+        o.employee_benefits_expense,
+        o.bonus_expense,
+        o.salary_expense,
+        o.administrative_expense,
+        o.individual_income_tax_by_department,
+        o.matter_description,
+        o.amount,
+        NULL::numeric AS detail_summary_amount,
+        o.base_currency_amount
+      FROM approval_expense_operation o
+      ${dateWhereFor('o')}
+      ${completedApprovalFallbackWhere('o', true)}
+      ${hasPaymentEventTable ? `UNION ALL
+      SELECT
+        'operation'::text AS expense_kind,
+        o.business_id,
+        o.process_instance_id,
+        o.request_date,
+        o.execution_region,
+        o.applicant_department,
+        o.applicant_department_id,
+        o.applicant_department_source,
+        o.applicant_department_path_names,
+        o.creator_department,
+        o.applicant_department AS query_department,
+        o.source_created_at,
+        o.source_updated_at,
+        o.updated_at,
+        NULL::timestamptz AS approval_completed_at,
+        o.approval_status,
+        o.raw_data->>'status' AS status,
+        NULL::text AS result,
+        o.raw_data->>'title' AS title,
+        'payment_event'::text AS accounting_source,
+        event.paid_at AS accounting_at,
+        event.id AS payment_event_id,
+        event.paid_at AS payment_event_paid_at,
+        event.amount AS payment_event_amount,
+        event.currency AS payment_event_currency,
+        event.evidence_text AS payment_event_evidence_text,
+        event.source_user_id AS payment_event_source_user_id,
+        o.expense_type,
+        o.operation_expense,
+        o.employee_benefits_expense,
+        o.bonus_expense,
+        o.salary_expense,
+        o.administrative_expense,
+        o.individual_income_tax_by_department,
+        o.matter_description,
+        event.amount,
+        NULL::numeric AS detail_summary_amount,
+        event.base_currency_amount
+      FROM approval_expense_payment_events event
+      JOIN approval_expense_operation o ON o.business_id = event.business_id
+      ${paymentDateWhereFor('event')}
+        AND event.status = 'confirmed'
+        AND event.rule_version = 'authorized-comment-v1'
+        AND event.source_type = 'comment_explicit_amount'
+        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM approval_expense_dept_split event_split
+          WHERE event_split.business_id = event.business_id
+        )
+      UNION ALL
+      SELECT
+        'purchase'::text AS expense_kind,
+        p.business_id,
+        p.process_instance_id,
+        p.request_date,
+        p.execution_region,
+        p.applicant_department,
+        p.applicant_department_id,
+        p.applicant_department_source,
+        p.applicant_department_path_names,
+        p.creator_department,
+        p.applicant_department AS query_department,
+        p.source_created_at,
+        p.source_updated_at,
+        p.updated_at,
+        NULL::timestamptz AS approval_completed_at,
+        p.approval_status,
+        p.raw_data->>'status' AS status,
+        NULL::text AS result,
+        p.raw_data->>'title' AS title,
+        'payment_event'::text AS accounting_source,
+        event.paid_at AS accounting_at,
+        event.id AS payment_event_id,
+        event.paid_at AS payment_event_paid_at,
+        event.amount AS payment_event_amount,
+        event.currency AS payment_event_currency,
+        event.evidence_text AS payment_event_evidence_text,
+        event.source_user_id AS payment_event_source_user_id,
+        p.purchase_expense AS expense_type,
+        NULL::varchar AS operation_expense,
+        NULL::varchar AS employee_benefits_expense,
+        NULL::varchar AS bonus_expense,
+        NULL::varchar AS salary_expense,
+        NULL::varchar AS administrative_expense,
+        NULL::jsonb AS individual_income_tax_by_department,
+        NULL::text AS matter_description,
+        NULL::numeric AS amount,
+        event.amount AS detail_summary_amount,
+        event.base_currency_amount
+      FROM approval_expense_payment_events event
+      JOIN approval_expense_purchase p ON p.business_id = event.business_id
+      ${paymentDateWhereFor('event')}
+        AND event.status = 'confirmed'
+        AND event.rule_version = 'authorized-comment-v1'
+        AND event.source_type = 'comment_explicit_amount'
+        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+      ` : ''}
       UNION ALL
       SELECT
         'purchase'::text AS expense_kind,
@@ -1064,6 +1294,14 @@ async function fetchApprovalExpenseDetails(dateRange) {
         p.raw_data->>'status' AS status,
         ${completedApprovalResultSql('p')} AS result,
         p.raw_data->>'title' AS title,
+        'completed_approval_fallback'::text AS accounting_source,
+        p.approval_completed_at AS accounting_at,
+        NULL::bigint AS payment_event_id,
+        NULL::timestamptz AS payment_event_paid_at,
+        NULL::numeric AS payment_event_amount,
+        NULL::text AS payment_event_currency,
+        NULL::text AS payment_event_evidence_text,
+        NULL::text AS payment_event_source_user_id,
         p.purchase_expense AS expense_type,
         NULL::varchar AS operation_expense,
         NULL::varchar AS employee_benefits_expense,
@@ -1077,7 +1315,7 @@ async function fetchApprovalExpenseDetails(dateRange) {
         p.base_currency_amount
       FROM approval_expense_purchase p
       ${dateWhereFor('p')}
-      ${completedApprovedExpenseWhere('p')}
+      ${completedApprovalFallbackWhere('p', false)}
     `, params);
     return result.rows;
   } finally {
@@ -1089,7 +1327,7 @@ function expenseSummaryCacheKey(dateRange) {
   return [
     expandMonthDate(dateRange.startDate, false) || '',
     expandMonthDate(dateRange.endDate, true) || '',
-    'completed-approval',
+    'completed-approval-and-payment-events',
   ].join('__');
 }
 
@@ -1098,17 +1336,17 @@ async function fetchApprovedExpenseSummaryFresh(dateRange) {
   const detailMap = new Map();
 
   try {
-    const verifiedDetails = (await fetchApprovalExpenseDetails(dateRange)).filter(isCompletedApprovedExpense);
+    const verifiedDetails = (await fetchApprovalExpenseDetails(dateRange)).filter(isAccountableExpense);
 
-    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'operation' && isCompletedApprovedExpense(e))) {
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'operation' && isAccountableExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
-      const key = `operation__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
+      const key = `${item.accounting_source || 'completed_approval'}__operation__${item.business_id || ''}__${item.payment_event_id || item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, query_month: queryMonth });
     }
 
-    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'purchase' && isCompletedApprovedExpense(e))) {
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'purchase' && isAccountableExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
-      const key = `purchase__${item.business_id || ''}__${item.process_instance_id || ''}__${queryMonth}`;
+      const key = `${item.accounting_source || 'completed_approval'}__purchase__${item.business_id || ''}__${item.payment_event_id || item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, query_month: queryMonth });
     }
   } catch (error) {

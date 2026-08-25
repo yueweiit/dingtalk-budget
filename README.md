@@ -203,3 +203,13 @@ See [SECURITY_CHANGELOG.md](SECURITY_CHANGELOG.md) for details on:
 ## License
 
 Private project.
+
+## Actual Payment Event Display
+
+Actual expense reporting first reads `approval_expense_payment_events`, which stores confirmed payment facts from authorized approval comments. The accounting month is the UTC month of `paid_at`. Multiple events for one approval are ordered by payment time and displayed as installment labels such as `第 1 期付款` and `第 2 期付款`; the detail page and export keep the payment date, amount, and comment evidence.
+
+When no eligible payment event exists, a non-split expense falls back to the completed-and-agreed approval amount and completion time. Salary, social insurance, housing fund, office space, and individual income tax forms continue to use department split rows and do not use whole-form payment events, preventing double counting.
+
+Before deployment, verify that `approval_expense_payment_events` and its indexes exist in the approval database. Code deployment does not migrate the server database automatically.
+
+The budget service accepts the comma-separated `DINGTALK_PAYMENT_EVENT_USER_IDS` environment variable for authorized payment-comment users. If it is absent, it uses the two formal users configured in code. Temporary local test users must be supplied only in the local process environment and must not be added to the production environment.

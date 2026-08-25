@@ -1,5 +1,13 @@
 import { formatUtcDate, formatUtcMonth } from './utcDate.js';
 import { departmentDisplayName, departmentIdentityKey } from './departmentIdentity.js';
+import {
+  buildPaymentCountMap,
+  buildPaymentSequenceMap,
+  paymentEventDate,
+  paymentEventEvidence,
+  paymentEventKey,
+  paymentEventLabel,
+} from './paymentEventDisplay.js';
 
 const textEncoder = new TextEncoder();
 
@@ -677,12 +685,22 @@ const extractExpenseDeptSplits = (item) => {
   return entries;
 };
 
-export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
-  approvedExpenseDetails
+export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
+  const paymentSequences = buildPaymentSequenceMap(approvedExpenseDetails);
+  const paymentCounts = buildPaymentCountMap(approvedExpenseDetails);
+  return approvedExpenseDetails
     .flatMap((item) => {
       const splits = extractExpenseDeptSplits(item);
       const baseAmount = toAmount(firstValue(item, ['base_currency_amount', 'detail_summary_amount', 'amount_rmb', 'amount', 'source_amount', 'total_amount'], ''));
-      const month = firstValue(item, ['query_month'], formatMonth(item.approval_completed_at));
+      const accountingAt = paymentEventDate(item);
+      const paymentSequence = paymentSequences.get(paymentEventKey(item)) || 0;
+      const paymentEventLabelValue = paymentEventLabel(
+        item,
+        paymentSequence,
+        paymentCounts.get(item?.business_id) || 0,
+      );
+      const paymentEvidence = paymentEventEvidence(item);
+      const month = firstValue(item, ['query_month'], formatMonth(accountingAt));
 
       if (splits.length === 0) {
         // 无拆分：保持原有的单行
@@ -713,8 +731,15 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
           requestDate: formatDate(item.request_date),
           sourceCreatedAt: formatDate(item.source_created_at),
           approvalCompletedAt: formatDate(item.approval_completed_at),
+          accountingAt: formatDate(accountingAt),
+          accountingSource: item.accounting_source || '',
+          paymentEventLabel: paymentEventLabelValue,
+          paymentEvidence,
+          paymentAmount: item.accounting_source === 'payment_event'
+            ? firstValue(item, ['payment_event_amount', 'amount', 'detail_summary_amount', 'base_currency_amount'], '')
+            : '',
           bizAction: item.biz_action,
-          splitNote: '',
+          splitNote: paymentEvidence,
           rollupDepartment: firstValue(item, ['rollup_dept_name', 'rollupDeptName']),
         }];
       }
@@ -737,12 +762,18 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) =>
         requestDate: formatDate(item.request_date),
         sourceCreatedAt: formatDate(item.source_created_at),
         approvalCompletedAt: formatDate(item.approval_completed_at),
+        accountingAt: formatDate(accountingAt),
+        accountingSource: item.accounting_source || '',
+        paymentEventLabel: paymentEventLabelValue,
+        paymentEvidence,
+        paymentAmount: item.accounting_source === 'payment_event' ? entry.amount : '',
         bizAction: item.biz_action,
         splitNote: `${splitTypeLabel(entry.splitType)}拆分自 ${item.business_id || ''}${entry.note ? `：${entry.note}` : ''}`,
         rollupDepartment: entry.rollupDepartment || firstValue(item, ['rollup_dept_name', 'rollupDeptName']),
       }));
     })
     .sort((a, b) => String(a.month).localeCompare(String(b.month)) || String(a.department).localeCompare(String(b.department)));
+};
 
 export const buildExecutionRows = ({ productionRows, operationRows, approvedExpenses, reportMonth }) => {
   const grouped = new Map();
@@ -1041,7 +1072,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   );
 
   const approvedDetailSheetRows = [
-    ['序号', '支出类型', '所属部门', '汇总部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '业务动作', '备注'],
+    ['序号', '支出类型', '所属部门', '汇总部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '记账日期', '记账来源', '付款期次', '付款金额', '付款评论', '业务动作', '备注'],
     ...approvedDetailRows.map((row, index) => [
       index + 1,
       row.expenseKind,
@@ -1056,6 +1087,11 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.requestDate,
       row.sourceCreatedAt,
       row.approvalCompletedAt,
+      row.accountingAt,
+      row.accountingSource,
+      row.paymentEventLabel,
+      row.paymentAmount,
+      row.paymentEvidence,
       row.bizAction,
       row.splitNote || '',
     ]),

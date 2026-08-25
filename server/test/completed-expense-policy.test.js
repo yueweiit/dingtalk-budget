@@ -106,7 +106,7 @@ test('database filtering uses the same final-result fields without task or cashi
   assert.doesNotMatch(sql, /cashier|activityId|bizAction|tasks|REFUSE|REJECT/i);
 });
 
-test('approved-expense query projections use the canonical result SQL', async () => {
+test('completed expense projections use the canonical result SQL', async () => {
   const resultSql = completedApprovalResultSql('expense');
   const resultIndex = resultSql.indexOf("expense.raw_data->>'result'");
   const camelIndex = resultSql.indexOf("expense.raw_data->>'flowResult'");
@@ -117,6 +117,8 @@ test('approved-expense query projections use the canonical result SQL', async ()
 
   const listSource = await readFile(path.join(import.meta.dirname, '..', 'routes', 'list.js'), 'utf8');
   assert.match(listSource, /completedApprovalResultSql\('o'\)\} AS result/);
+  assert.match(listSource, /'completed_department_split'::text AS accounting_source/);
+  assert.match(listSource, /'completed_approval_fallback'::text AS accounting_source/);
   assert.match(listSource, /completedApprovalResultSql\('p'\)\} AS result/);
 });
 
