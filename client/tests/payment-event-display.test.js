@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildApprovedDetailRows } from '../src/utils/xlsxReport.js';
+import {
+  buildApprovedDetailRows,
+  buildExpenseShareRows,
+} from '../src/utils/xlsxReport.js';
 import {
   buildPaymentSequenceMap,
   paymentEventDate,
@@ -62,4 +65,21 @@ test('exports payment date, installment, amount, and comment evidence', () => {
   assert.equal(row.paymentEventLabel, '实际付款');
   assert.equal(row.paymentAmount, 1250);
   assert.equal(row.paymentEvidence, '已支付：1250元');
+});
+
+test('部门支出占比使用事项说明而不是表单标题', () => {
+  const [detailRow] = buildApprovedDetailRows([{
+    accounting_source: 'completed_approval_fallback',
+    business_id: 'EXPENSE-MATTER-001',
+    expense_kind: 'operation',
+    applicant_department: '财务中心',
+    amount: 880,
+    base_currency_amount: 880,
+    query_month: '2026-08',
+    title: '运营支出表单标题',
+    matter_description: '事项说明组件中的真实内容',
+  }]);
+
+  const [shareRow] = buildExpenseShareRows([detailRow]);
+  assert.equal(shareRow.detail, '事项说明组件中的真实内容');
 });

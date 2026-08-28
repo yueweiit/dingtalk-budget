@@ -728,6 +728,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
           month,
           businessId: item.business_id,
           title: item.title,
+          matterDescription: firstValue(item, ['matter_description', 'matterDescription'], ''),
           amount: firstValue(item, ['amount', 'detail_summary_amount', 'source_amount', 'total_amount', 'base_currency_amount'], ''),
           baseCurrencyAmount: baseAmount,
           approvalStatus: item.approval_status,
@@ -759,6 +760,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
         month,
         businessId: item.business_id,
         title: item.title,
+        matterDescription: firstValue(item, ['matter_description', 'matterDescription'], ''),
         amount: entry.amount,
         baseCurrencyAmount: entry.amount,
         approvalStatus: item.approval_status,
@@ -942,13 +944,13 @@ const buildBudgetShareRows = ({ productionRows, operationRows, reportMonth }) =>
   return groupShareRows(rows, ['departmentIdentityKey', 'month'], 'amount');
 };
 
-const buildExpenseShareRows = (approvedDetailRows) => {
+export const buildExpenseShareRows = (approvedDetailRows) => {
   const rows = approvedDetailRows.map((row) => ({
     department: row.department || 'Unknown',
     departmentIdentityKey: departmentIdentityKey(row),
     month: row.month || 'Unspecified',
     category: row.expenseKind || '未分类',
-    detail: row.title || row.expenseKind || '未分类',
+    detail: row.matterDescription || row.title || row.expenseKind || '未分类',
     amount: toAmount(row.baseCurrencyAmount || row.amount),
     formNo: row.businessId,
   }));
