@@ -367,6 +367,7 @@ function splitExpenseCategory(splitType) {
   if (type === 'salary' || type === 'social_insurance') return 'salary';
   if (type === 'office' || type === 'office_space') return 'office';
   if (type === 'individual_income_tax' || type === 'tax') return 'tax';
+  if (type === 'it_operation' || type === 'it') return 'it_operation';
   return 'management';
 }
 
@@ -424,6 +425,7 @@ function addExpenseBreakdown(map, department, month, values = {}) {
     salary: 0,
     office: 0,
     tax: 0,
+    itOperation: 0,
     management: 0,
     operation_count: 0,
     purchase_count: 0,
@@ -433,6 +435,7 @@ function addExpenseBreakdown(map, department, month, values = {}) {
   current.salary += numberValue(values.salary);
   current.office += numberValue(values.office);
   current.tax += numberValue(values.tax);
+  current.itOperation += numberValue(values.itOperation);
   current.management += numberValue(values.management);
   current.operation_count += numberValue(values.operation_count);
   current.purchase_count += numberValue(values.purchase_count);
@@ -548,6 +551,7 @@ function buildAllocatedExpenseItems(rows) {
       salaryTotal: 0,
       officeTotal: 0,
       taxTotal: 0,
+      itOperationTotal: 0,
     };
 
     const operationExpense = numberValue(row.operation_expense);
@@ -555,13 +559,15 @@ function buildAllocatedExpenseItems(rows) {
     const salaryExpense = numberValue(row.salary_expense);
     const officeExpense = numberValue(row.office_expense);
     const taxExpense = numberValue(row.tax_expense);
+    const itOperationExpense = numberValue(row.it_operation_expense);
     current.managementTotal += numberValue(row.management_expense);
     current.salaryTotal += salaryExpense;
     current.officeTotal += officeExpense;
     current.taxTotal += taxExpense;
-    current.operationTotal += operationExpense + salaryExpense + officeExpense + taxExpense;
+    current.itOperationTotal += itOperationExpense;
+    current.operationTotal += operationExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense;
     current.purchaseTotal += purchaseExpense;
-    current.operationCount += operationExpense + salaryExpense + officeExpense > 0 ? 1 : 0;
+    current.operationCount += operationExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense > 0 ? 1 : 0;
     current.purchaseCount += purchaseExpense > 0 ? 1 : 0;
     grouped.set(key, current);
   }
@@ -574,6 +580,7 @@ function buildAllocatedExpenseItems(rows) {
     salaryTotal: Number(item.salaryTotal.toFixed(2)),
     officeTotal: Number(item.officeTotal.toFixed(2)),
     taxTotal: Number(item.taxTotal.toFixed(2)),
+    itOperationTotal: Number(item.itOperationTotal.toFixed(2)),
   }));
 }
 
@@ -631,7 +638,7 @@ async function attachExpenseAmounts(records, {
     if (!shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) continue;
     const category = splitExpenseCategory(row.split_type);
     addExpenseBreakdown(expenseMap, department, month, {
-      [category]: splitAmount,
+      ...(category === 'it_operation' ? { itOperation: splitAmount } : { [category]: splitAmount }),
       ...expenseCountValues(item, businessId, department, month, countedExpenseDepartments),
     });
   }
@@ -666,6 +673,7 @@ async function attachExpenseAmounts(records, {
       salary: 0,
       office: 0,
       tax: 0,
+      itOperation: 0,
       management: 0,
       operation_count: 0,
       purchase_count: 0,
@@ -677,7 +685,8 @@ async function attachExpenseAmounts(records, {
     const salaryRounded = Number(direct.salary.toFixed(2));
     const officeRounded = Number(direct.office.toFixed(2));
     const taxRounded = Number(direct.tax.toFixed(2));
-    const totalRounded = Number((managementRounded + salaryRounded + officeRounded + taxRounded).toFixed(2));
+    const itOperationRounded = Number(direct.itOperation.toFixed(2));
+    const totalRounded = Number((managementRounded + salaryRounded + officeRounded + taxRounded + itOperationRounded).toFixed(2));
 
     return {
       ...row,
@@ -687,6 +696,7 @@ async function attachExpenseAmounts(records, {
       salary_expense: salaryRounded,
       office_expense: officeRounded,
       tax_expense: taxRounded,
+      it_operation_expense: itOperationRounded,
       approved_amount: totalRounded,
       operation_count: direct.operation_count,
       purchase_count: direct.purchase_count,
@@ -697,6 +707,7 @@ async function attachExpenseAmounts(records, {
         salary: salaryRounded,
         office: officeRounded,
         tax: taxRounded,
+        it_operation: itOperationRounded,
         total: totalRounded,
       },
     };
@@ -728,6 +739,7 @@ function extractDeptSplitEntries(item) {
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
+    { col: 'it_operation_by_department', splitType: 'it_operation' },
   ];
 
   for (const { col, splitType } of splitColumns) {
@@ -775,6 +787,7 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
     salaryTotal: 0,
     officeTotal: 0,
     taxTotal: 0,
+    itOperationTotal: 0,
   };
 
   current.operationTotal += numberValue(values.operationTotal);
@@ -783,6 +796,7 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
   current.salaryTotal += numberValue(values.salaryTotal);
   current.officeTotal += numberValue(values.officeTotal);
   current.taxTotal += numberValue(values.taxTotal);
+  current.itOperationTotal += numberValue(values.itOperationTotal);
   current.operationCount += numberValue(values.operationCount);
   current.purchaseCount += numberValue(values.purchaseCount);
   grouped.set(key, current);
@@ -904,6 +918,7 @@ function roundApprovedExpenseItems(items) {
     salaryTotal: Number(numberValue(item.salaryTotal).toFixed(2)),
     officeTotal: Number(numberValue(item.officeTotal).toFixed(2)),
     taxTotal: Number(numberValue(item.taxTotal).toFixed(2)),
+    itOperationTotal: Number(numberValue(item.itOperationTotal).toFixed(2)),
     operationCount: Number(numberValue(item.operationCount).toFixed(2)),
     purchaseCount: Number(numberValue(item.purchaseCount).toFixed(2)),
   }));
@@ -958,6 +973,7 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
         if (category === 'salary') values.salaryTotal = entry.amount;
         else if (category === 'office') values.officeTotal = entry.amount;
         else if (category === 'tax') values.taxTotal = entry.amount;
+        else if (category === 'it_operation') values.itOperationTotal = entry.amount;
         else values.managementTotal = entry.amount;
       }
 
@@ -1123,6 +1139,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.salary_expense,
         o.administrative_expense,
         o.individual_income_tax_by_department,
+        o.it_operation_by_department,
         o.matter_description,
         o.amount,
         NULL::numeric AS detail_summary_amount,
@@ -1166,6 +1183,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.salary_expense,
         o.administrative_expense,
         o.individual_income_tax_by_department,
+        o.it_operation_by_department,
         o.matter_description,
         o.amount,
         NULL::numeric AS detail_summary_amount,
@@ -1209,6 +1227,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.salary_expense,
         o.administrative_expense,
         o.individual_income_tax_by_department,
+        o.it_operation_by_department,
         o.matter_description,
         event.amount,
         NULL::numeric AS detail_summary_amount,
@@ -1261,6 +1280,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS salary_expense,
         NULL::varchar AS administrative_expense,
         NULL::jsonb AS individual_income_tax_by_department,
+        NULL::jsonb AS it_operation_by_department,
         NULL::text AS matter_description,
         NULL::numeric AS amount,
         event.amount AS detail_summary_amount,
@@ -1309,6 +1329,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS salary_expense,
         NULL::varchar AS administrative_expense,
         NULL::jsonb AS individual_income_tax_by_department,
+        NULL::jsonb AS it_operation_by_department,
         NULL::text AS matter_description,
         NULL::numeric AS amount,
         p.detail_summary_amount,

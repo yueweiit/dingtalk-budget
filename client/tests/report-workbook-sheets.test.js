@@ -36,3 +36,8 @@ test('导出报表只保留当前工作表并移除标记页签', async () => {
     assert.ok(!workbook.includes(`name="${sheet}"`), `不应包含工作表：${sheet}`);
   }
 });
+
+test('执行报表包含 IT 运维费用独立列', async () => {
+  const workbook = await workbookXmlText();
+  assert.ok(workbook.includes('IT运维费用支出'));
+});

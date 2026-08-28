@@ -30,6 +30,7 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - DingTalk bot query endpoint (`/api/dingtalk/querySimple`)
 - Pending approval auto-retry with backfill mechanism
 - Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
+- IT operation expense details are split by department like salary details, stored separately as `it_operation`, and included in actual expense totals without being merged into management or salary expense
 - API Key authentication, rate limiting, circuit breaker
 
 ## Tech Stack

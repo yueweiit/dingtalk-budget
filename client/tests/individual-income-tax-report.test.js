@@ -41,3 +41,41 @@ test('exports individual income tax as an independent expense amount', () => {
 
   assert.ok(summaryRows.some(([label, value]) => label === '个税支出金额' && value === '5423.00'));
 });
+
+test('exports IT operation as an independent expense amount and includes it in the total', () => {
+  const executionRows = buildExecutionRows({
+    productionRows: [],
+    operationRows: [],
+    approvedExpenses: [{
+      department: '信息技术部',
+      month: '2026-08',
+      operationTotal: 876.5,
+      purchaseTotal: 0,
+      managementTotal: 0,
+      salaryTotal: 0,
+      officeTotal: 0,
+      taxTotal: 0,
+      itOperationTotal: 876.5,
+      operationCount: 1,
+      purchaseCount: 0,
+    }],
+    reportMonth: '2026-08',
+  });
+
+  assert.equal(executionRows[0].itOperationApproved, 876.5);
+  assert.equal(executionRows[0].managementApproved, 0);
+  assert.equal(executionRows[0].totalApproved, 876.5);
+
+  const summaryRows = buildReportSummaryRows({
+    productionCount: 0,
+    nonProductionCount: 0,
+    productionRows: [],
+    operationRows: [],
+    approvedDetailRows: [],
+    budgetShareRows: [],
+    expenseShareRows: [],
+    executionRows,
+  });
+
+  assert.ok(summaryRows.some(([label, value]) => label === 'IT运维费用支出金额' && value === '876.50'));
+});

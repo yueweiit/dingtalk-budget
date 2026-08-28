@@ -57,6 +57,7 @@ const expenseFields = [
   'salary_expense',
   'office_expense',
   'tax_expense',
+  'it_operation_expense',
   'operation_count',
   'purchase_count',
 ];
@@ -68,6 +69,7 @@ const approvedSummaryFields = [
   'salaryTotal',
   'officeTotal',
   'taxTotal',
+  'itOperationTotal',
   'operationCount',
   'purchaseCount',
 ];
@@ -193,7 +195,8 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
     const salaryExpense = rounded(totals.salary_expense);
     const officeExpense = rounded(totals.office_expense);
     const taxExpense = rounded(totals.tax_expense);
-    const approvedAmount = rounded(managementExpense + salaryExpense + officeExpense + taxExpense);
+    const itOperationExpense = rounded(totals.it_operation_expense);
+    const approvedAmount = rounded(managementExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense);
 
     rolledUp.push({
       ...group.parent,
@@ -207,6 +210,7 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
       salary_expense: salaryExpense,
       office_expense: officeExpense,
       tax_expense: taxExpense,
+      it_operation_expense: itOperationExpense,
       approved_amount: approvedAmount,
       operation_count: rounded(totals.operation_count),
       purchase_count: rounded(totals.purchase_count),
@@ -217,6 +221,7 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
         salary: salaryExpense,
         office: officeExpense,
         tax: taxExpense,
+        it_operation: itOperationExpense,
         total: approvedAmount,
       },
       child_expenses: config.children.map((child) => childExpenses.get(child.id)),
