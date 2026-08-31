@@ -591,6 +591,7 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
     nonProductionBudget: 0,
     operationApproved: 0,
     purchaseApproved: 0,
+    monthlySettlementApproved: 0,
     managementApproved: 0,
     salaryApproved: 0,
     officeApproved: 0,
@@ -617,8 +618,13 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
 const expenseKindLabel = (value) => {
   if (value === 'operation') return '运营支出';
   if (value === 'purchase') return '采购支出';
+  if (value === 'monthly_settlement') return '月结付款';
   return value || '';
 };
+
+const expenseDisplayKind = (item) => item?.accounting_source === 'monthly_settlement'
+  ? '月结付款'
+  : expenseKindLabel(item?.expense_kind);
 
 const splitTypeLabel = (value) => {
   const type = String(value || '').trim().toLowerCase();
@@ -711,7 +717,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
         const rollupDepartmentId = firstValue(item, ['rollup_dept_id', 'rollupDeptId']);
         const department = rollupDepartment || departmentDisplayName(item);
         return [{
-          expenseKind: expenseKindLabel(item.expense_kind),
+          expenseKind: expenseDisplayKind(item),
           department,
           departmentId: firstValue(item, [
             'reporting_dept_id',
@@ -739,7 +745,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
           accountingSource: item.accounting_source || '',
           paymentEventLabel: paymentEventLabelValue,
           paymentEvidence,
-          paymentAmount: item.accounting_source === 'payment_event'
+          paymentAmount: item.accounting_source === 'payment_event' || item.accounting_source === 'monthly_settlement'
             ? firstValue(item, ['payment_event_amount', 'amount', 'detail_summary_amount', 'base_currency_amount'], '')
             : '',
           bizAction: item.biz_action,
@@ -750,7 +756,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
 
       // 有部门拆分：直接使用 approval_expense_dept_split.amount，不再按原单总额二次分摊。
       return splits.map((entry) => ({
-        expenseKind: expenseKindLabel(item.expense_kind),
+        expenseKind: expenseDisplayKind(item),
         department: entry.department,
         departmentId: entry.departmentId,
         departmentIdentityKey: entry.departmentIdentityKey || departmentIdentityKey({
@@ -771,7 +777,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
         accountingSource: item.accounting_source || '',
         paymentEventLabel: paymentEventLabelValue,
         paymentEvidence,
-        paymentAmount: item.accounting_source === 'payment_event' ? entry.amount : '',
+        paymentAmount: item.accounting_source === 'payment_event' || item.accounting_source === 'monthly_settlement' ? entry.amount : '',
         bizAction: item.biz_action,
         splitNote: `${splitTypeLabel(entry.splitType)}拆分自 ${item.business_id || ''}${entry.note ? `：${entry.note}` : ''}`,
         rollupDepartment: entry.rollupDepartment || firstValue(item, ['rollup_dept_name', 'rollupDeptName']),
@@ -804,6 +810,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       nonProductionBudget: 0,
       operationApproved: 0,
       purchaseApproved: 0,
+      monthlySettlementApproved: 0,
       managementApproved: 0,
       salaryApproved: 0,
       officeApproved: 0,
@@ -818,6 +825,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
 
     current.operationApproved += toAmount(item.operationTotal);
     current.purchaseApproved += toAmount(item.purchaseTotal);
+    current.monthlySettlementApproved += toAmount(item.monthlySettlementTotal);
     current.managementApproved += toAmount(item.managementTotal);
     current.salaryApproved += toAmount(item.salaryTotal);
     current.officeApproved += toAmount(item.officeTotal);
@@ -827,8 +835,10 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
     current.purchaseCount += Number(item.purchaseCount || 0);
     if (current.budgetSubmitted) {
       const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.officeTotal) + toAmount(item.taxTotal) + toAmount(item.itOperationTotal);
-      const fallbackApproved = toAmount(item.operationTotal) + toAmount(item.purchaseTotal);
-      current.budgetSubmittedApprovedTotal += classifiedApproved > 0 ? classifiedApproved : fallbackApproved;
+      const fallbackApproved = toAmount(item.operationTotal) + toAmount(item.purchaseTotal) + toAmount(item.monthlySettlementTotal);
+      current.budgetSubmittedApprovedTotal += classifiedApproved > 0
+        ? classifiedApproved + toAmount(item.monthlySettlementTotal)
+        : fallbackApproved;
     }
     grouped.set(key, current);
   }
@@ -838,8 +848,8 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       const totalBudget = row.productionBudget + row.nonProductionBudget;
       const classifiedApproved = row.managementApproved + row.salaryApproved + row.officeApproved + row.taxApproved + row.itOperationApproved;
       const totalApproved = classifiedApproved > 0
-        ? classifiedApproved
-        : row.operationApproved + row.purchaseApproved;
+        ? classifiedApproved + row.monthlySettlementApproved
+        : row.operationApproved + row.purchaseApproved + row.monthlySettlementApproved;
       return {
         ...row,
         totalBudget,
@@ -876,6 +886,7 @@ export const buildReportSummaryRows = ({
   ['生产预算金额', sumRows(executionRows, 'productionBudget').toFixed(2)],
   ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
   ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
+  ['月结付款金额', sumRows(executionRows, 'monthlySettlementApproved').toFixed(2)],
   ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
   ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
   ['个税支出金额', sumRows(executionRows, 'taxApproved').toFixed(2)],

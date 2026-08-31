@@ -54,6 +54,7 @@ const expenseFields = [
   'management_expense',
   'operation_expense',
   'purchase_expense',
+  'monthly_settlement_expense',
   'salary_expense',
   'office_expense',
   'tax_expense',
@@ -65,6 +66,7 @@ const expenseFields = [
 const approvedSummaryFields = [
   'operationTotal',
   'purchaseTotal',
+  'monthlySettlementTotal',
   'managementTotal',
   'salaryTotal',
   'officeTotal',
@@ -72,6 +74,7 @@ const approvedSummaryFields = [
   'itOperationTotal',
   'operationCount',
   'purchaseCount',
+  'monthlySettlementCount',
 ];
 
 const numberValue = (value) => {
@@ -192,11 +195,12 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
     const managementExpense = rounded(totals.management_expense);
     const operationExpense = rounded(totals.operation_expense);
     const purchaseExpense = rounded(totals.purchase_expense);
+    const monthlySettlementExpense = rounded(totals.monthly_settlement_expense);
     const salaryExpense = rounded(totals.salary_expense);
     const officeExpense = rounded(totals.office_expense);
     const taxExpense = rounded(totals.tax_expense);
     const itOperationExpense = rounded(totals.it_operation_expense);
-    const approvedAmount = rounded(managementExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense);
+    const approvedAmount = rounded(managementExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense + monthlySettlementExpense);
 
     rolledUp.push({
       ...group.parent,
@@ -207,6 +211,7 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
       management_expense: managementExpense,
       operation_expense: operationExpense,
       purchase_expense: purchaseExpense,
+      monthly_settlement_expense: monthlySettlementExpense,
       salary_expense: salaryExpense,
       office_expense: officeExpense,
       tax_expense: taxExpense,
@@ -218,6 +223,7 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
         management: managementExpense,
         operation: operationExpense,
         purchase: purchaseExpense,
+        monthly_settlement: monthlySettlementExpense,
         salary: salaryExpense,
         office: officeExpense,
         tax: taxExpense,

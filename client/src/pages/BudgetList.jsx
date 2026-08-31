@@ -475,7 +475,14 @@ function splitTypeLabel(value) {
 function expenseKindLabel(value) {
   if (value === 'operation') return '运营支出';
   if (value === 'purchase') return '采购支出';
+  if (value === 'monthly_settlement') return '月结付款';
   return value || '支出';
+}
+
+function expenseDisplayKind(item) {
+  return item?.accounting_source === 'monthly_settlement'
+    ? '月结付款'
+    : expenseKindLabel(item?.expense_kind);
 }
 
 function sectionKeyForSplit(splitType) {
@@ -534,6 +541,7 @@ function extractDetailSplits(item) {
 
 function expenseDetailBase(item, paymentSequence = 0, paymentCount = 0) {
   const isPaymentEvent = item?.accounting_source === 'payment_event';
+  const isMonthlySettlement = item?.accounting_source === 'monthly_settlement';
   const paymentAmount = toNum(firstNonEmpty(item?.payment_event_amount, item?.amount, item?.detail_summary_amount));
   return {
     date: paymentEventDate(item),
@@ -542,8 +550,8 @@ function expenseDetailBase(item, paymentSequence = 0, paymentCount = 0) {
     description: firstNonEmpty(item?.matter_description, item?.title),
     paymentEventLabel: paymentEventLabel(item, paymentSequence, paymentCount),
     paymentEvidence: paymentEventEvidence(item),
-    paymentAmount: isPaymentEvent ? paymentAmount : null,
-    paymentCurrency: isPaymentEvent ? String(item?.payment_event_currency || '') : '',
+    paymentAmount: isPaymentEvent || isMonthlySettlement ? paymentAmount : null,
+    paymentCurrency: isPaymentEvent || isMonthlySettlement ? String(item?.payment_event_currency || item?.payment_currency || '') : '',
   };
 }
 
@@ -556,7 +564,7 @@ function directExpenseDetailRow(item, amount, note = '', paymentSequence = 0, pa
       item?.purchase_expense,
       item?.operation_expense,
       item?.expense_type,
-      expenseKindLabel(item?.expense_kind)
+      expenseDisplayKind(item)
     ),
     note: evidence ? `${note ? `${note}\uff1a` : ''}${evidence}` : note,
   };

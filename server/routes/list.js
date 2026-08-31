@@ -396,7 +396,15 @@ function addDirectExpense(
   businessId = ''
 ) {
   const value = numberValue(amount);
-  if (value <= 0 || !shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) return;
+  if (value <= 0) return;
+  if (item?.accounting_source === 'monthly_settlement' || item?.expense_kind === 'monthly_settlement') {
+    addExpenseBreakdown(map, department, month, {
+      monthlySettlement: value,
+      monthlySettlementCount: 1,
+    });
+    return;
+  }
+  if (!shouldIncludeDepartmentExpense(department, month, item?.execution_region, budgetedDepartmentMonths)) return;
   const countValues = expenseCountValues(item, businessId, department, month, countedExpenseDepartments);
   if (item?.expense_kind === 'purchase') {
     addExpenseBreakdown(map, department, month, {
@@ -421,7 +429,8 @@ function addExpenseBreakdown(map, department, month, values = {}) {
   const key = `${deptKey}__${month}`;
   const current = map.get(key) || {
     operation: 0,
-    purchase: 0,
+      purchase: 0,
+      monthlySettlement: 0,
     salary: 0,
     office: 0,
     tax: 0,
@@ -429,9 +438,12 @@ function addExpenseBreakdown(map, department, month, values = {}) {
     management: 0,
     operation_count: 0,
     purchase_count: 0,
+    monthlySettlementCount: 0,
   };
   current.operation += numberValue(values.operation);
   current.purchase += numberValue(values.purchase);
+  current.monthlySettlement += numberValue(values.monthlySettlement);
+  current.monthlySettlementCount += numberValue(values.monthlySettlementCount);
   current.salary += numberValue(values.salary);
   current.office += numberValue(values.office);
   current.tax += numberValue(values.tax);
@@ -547,6 +559,8 @@ function buildAllocatedExpenseItems(rows) {
       operationCount: 0,
       purchaseTotal: 0,
       purchaseCount: 0,
+      monthlySettlementTotal: 0,
+      monthlySettlementCount: 0,
       managementTotal: 0,
       salaryTotal: 0,
       officeTotal: 0,
@@ -556,6 +570,7 @@ function buildAllocatedExpenseItems(rows) {
 
     const operationExpense = numberValue(row.operation_expense);
     const purchaseExpense = numberValue(row.purchase_expense);
+    const monthlySettlementExpense = numberValue(row.monthly_settlement_expense);
     const salaryExpense = numberValue(row.salary_expense);
     const officeExpense = numberValue(row.office_expense);
     const taxExpense = numberValue(row.tax_expense);
@@ -567,8 +582,10 @@ function buildAllocatedExpenseItems(rows) {
     current.itOperationTotal += itOperationExpense;
     current.operationTotal += operationExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense;
     current.purchaseTotal += purchaseExpense;
+    current.monthlySettlementTotal += monthlySettlementExpense;
     current.operationCount += operationExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense > 0 ? 1 : 0;
     current.purchaseCount += purchaseExpense > 0 ? 1 : 0;
+    current.monthlySettlementCount += monthlySettlementExpense > 0 ? 1 : 0;
     grouped.set(key, current);
   }
 
@@ -576,6 +593,7 @@ function buildAllocatedExpenseItems(rows) {
     ...item,
     operationTotal: Number(item.operationTotal.toFixed(2)),
     purchaseTotal: Number(item.purchaseTotal.toFixed(2)),
+    monthlySettlementTotal: Number(item.monthlySettlementTotal.toFixed(2)),
     managementTotal: Number(item.managementTotal.toFixed(2)),
     salaryTotal: Number(item.salaryTotal.toFixed(2)),
     officeTotal: Number(item.officeTotal.toFixed(2)),
@@ -670,6 +688,7 @@ async function attachExpenseAmounts(records, {
     const direct = expenseMap.get(`${reportingDepartmentKey(row, month)}__${month}`) || {
       operation: 0,
       purchase: 0,
+      monthlySettlement: 0,
       salary: 0,
       office: 0,
       tax: 0,
@@ -677,22 +696,25 @@ async function attachExpenseAmounts(records, {
       management: 0,
       operation_count: 0,
       purchase_count: 0,
+      monthlySettlementCount: 0,
     };
     const managementExpense = direct.management || direct.operation + direct.purchase;
     const managementRounded = Number(managementExpense.toFixed(2));
     const operationRounded = Number(direct.operation.toFixed(2));
     const purchaseRounded = Number(direct.purchase.toFixed(2));
+    const monthlySettlementRounded = Number(direct.monthlySettlement.toFixed(2));
     const salaryRounded = Number(direct.salary.toFixed(2));
     const officeRounded = Number(direct.office.toFixed(2));
     const taxRounded = Number(direct.tax.toFixed(2));
     const itOperationRounded = Number(direct.itOperation.toFixed(2));
-    const totalRounded = Number((managementRounded + salaryRounded + officeRounded + taxRounded + itOperationRounded).toFixed(2));
+    const totalRounded = Number((managementRounded + salaryRounded + officeRounded + taxRounded + itOperationRounded + monthlySettlementRounded).toFixed(2));
 
     return {
       ...row,
       management_expense: managementRounded,
       operation_expense: operationRounded,
       purchase_expense: purchaseRounded,
+      monthly_settlement_expense: monthlySettlementRounded,
       salary_expense: salaryRounded,
       office_expense: officeRounded,
       tax_expense: taxRounded,
@@ -700,10 +722,12 @@ async function attachExpenseAmounts(records, {
       approved_amount: totalRounded,
       operation_count: direct.operation_count,
       purchase_count: direct.purchase_count,
+      monthly_settlement_count: direct.monthlySettlementCount,
       expense_breakdown: {
         management: managementRounded,
         operation: operationRounded,
         purchase: purchaseRounded,
+        monthly_settlement: monthlySettlementRounded,
         salary: salaryRounded,
         office: officeRounded,
         tax: taxRounded,
@@ -783,6 +807,8 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
     operationCount: 0,
     purchaseTotal: 0,
     purchaseCount: 0,
+    monthlySettlementTotal: 0,
+    monthlySettlementCount: 0,
     managementTotal: 0,
     salaryTotal: 0,
     officeTotal: 0,
@@ -792,6 +818,8 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
 
   current.operationTotal += numberValue(values.operationTotal);
   current.purchaseTotal += numberValue(values.purchaseTotal);
+  current.monthlySettlementTotal += numberValue(values.monthlySettlementTotal);
+  current.monthlySettlementCount += numberValue(values.monthlySettlementCount);
   current.managementTotal += numberValue(values.managementTotal);
   current.salaryTotal += numberValue(values.salaryTotal);
   current.officeTotal += numberValue(values.officeTotal);
@@ -914,6 +942,8 @@ function roundApprovedExpenseItems(items) {
     ...item,
     operationTotal: Number(numberValue(item.operationTotal).toFixed(2)),
     purchaseTotal: Number(numberValue(item.purchaseTotal).toFixed(2)),
+    monthlySettlementTotal: Number(numberValue(item.monthlySettlementTotal).toFixed(2)),
+    monthlySettlementCount: Number(numberValue(item.monthlySettlementCount).toFixed(2)),
     managementTotal: Number(numberValue(item.managementTotal).toFixed(2)),
     salaryTotal: Number(numberValue(item.salaryTotal).toFixed(2)),
     officeTotal: Number(numberValue(item.officeTotal).toFixed(2)),
@@ -936,6 +966,14 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
 
     const directDepartmentRecord = expenseDepartmentRecord(item);
     const splits = splitRowsOf(item);
+
+    if (item.accounting_source === 'monthly_settlement' || item.expense_kind === 'monthly_settlement') {
+      addApprovedExpenseGroup(grouped, directDepartmentRecord, month, {
+        monthlySettlementTotal: amount,
+        monthlySettlementCount: 1,
+      });
+      continue;
+    }
 
     if (splits.length === 0 && item.expense_kind === 'purchase') {
       if (!shouldIncludeDepartmentExpense(directDepartmentRecord, month, item.execution_region, budgetedDepartmentMonths)) continue;
@@ -1023,7 +1061,8 @@ function paymentEventDateExpr(alias) {
 }
 
 function isPaymentEventExpense(item) {
-  return item?.accounting_source === 'payment_event' && Boolean(item?.accounting_at);
+  return (item?.accounting_source === 'payment_event' || item?.accounting_source === 'monthly_settlement')
+    && Boolean(item?.accounting_at);
 }
 
 function isAccountableExpense(item) {
@@ -1036,6 +1075,7 @@ function isAccountableExpense(item) {
 export async function fetchApprovalExpenseDetails(dateRange) {
   const params = [];
   let hasPaymentEventTable = false;
+  let hasMonthlySettlementTable = false;
   const startDate = expandMonthDate(dateRange.startDate, false);
   const endDate = expandMonthDate(dateRange.endDate, true);
   const startParam = startDate ? params.push(startDate) : null;
@@ -1057,12 +1097,20 @@ export async function fetchApprovalExpenseDetails(dateRange) {
     return whereClause;
   };
 
+  const monthlyPaymentDateWhere = () => {
+    let whereClause = 'WHERE 1=1';
+    if (startParam) whereClause += ` AND d.payment_date >= $${startParam}::date`;
+    if (endParam) whereClause += ` AND d.payment_date <= $${endParam}::date`;
+    return whereClause;
+  };
+
   const completedDepartmentSplitWhere = (alias) => `${completedApprovedExpenseWhere(alias)}
     AND EXISTS (
       SELECT 1
       FROM approval_expense_dept_split split
       WHERE split.business_id = ${alias}.business_id
-    )`;
+    )
+    `;
 
   const completedApprovalFallbackWhere = (alias, hasDepartmentSplit) => `${completedApprovedExpenseWhere(alias)}
     ${hasDepartmentSplit ? `AND NOT EXISTS (
@@ -1100,9 +1148,12 @@ export async function fetchApprovalExpenseDetails(dateRange) {
            WHERE table_schema = 'public'
              AND table_name = 'approval_expense_payment_events'
              AND column_name = 'rule_version'
-         ) AS has_rule_version`
+         ) AS has_rule_version,
+         to_regclass('public.approval_expense_monthly_settlement') AS monthly_table`
     );
     hasPaymentEventTable = Boolean(capability.rows[0]?.table_name) && Boolean(capability.rows[0]?.has_rule_version);
+    // Linked approvals are audit-only. They must never gate monthly-settlement accounting.
+    hasMonthlySettlementTable = hasPaymentEventTable && Boolean(capability.rows[0]?.monthly_table);
     const result = await client.query(`
       SELECT
         'operation'::text AS expense_kind,
@@ -1239,11 +1290,11 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         AND event.rule_version = 'authorized-comment-v1'
         AND event.source_type = 'comment_explicit_amount'
         AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
-        AND NOT EXISTS (
+         AND NOT EXISTS (
           SELECT 1
           FROM approval_expense_dept_split event_split
-          WHERE event_split.business_id = event.business_id
-        )
+           WHERE event_split.business_id = event.business_id
+         )
       UNION ALL
       SELECT
         'purchase'::text AS expense_kind,
@@ -1289,9 +1340,9 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       JOIN approval_expense_purchase p ON p.business_id = event.business_id
       ${paymentDateWhereFor('event')}
         AND event.status = 'confirmed'
-        AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
-        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+         AND event.rule_version = 'authorized-comment-v1'
+         AND event.source_type = 'comment_explicit_amount'
+         AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
       ` : ''}
       UNION ALL
       SELECT
@@ -1337,6 +1388,55 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       FROM approval_expense_purchase p
       ${dateWhereFor('p')}
       ${completedApprovalFallbackWhere('p', false)}
+      ${hasMonthlySettlementTable ? `UNION ALL
+      SELECT
+        'monthly_settlement'::text AS expense_kind,
+        monthly.business_id,
+        monthly.process_instance_id,
+        monthly.request_date,
+        NULL::varchar AS execution_region,
+        monthly.applicant_department,
+        monthly.applicant_department_id,
+        monthly.applicant_department_source,
+        monthly.applicant_department_path_names,
+        monthly.applicant_department AS creator_department,
+        monthly.applicant_department AS query_department,
+        monthly.source_created_at,
+        monthly.source_updated_at,
+        monthly.updated_at,
+        monthly.approval_completed_at,
+        monthly.approval_status,
+        monthly.approval_status AS status,
+        monthly.approval_result AS result,
+        COALESCE(monthly.form_name, monthly.raw_data->>'title') AS title,
+        'monthly_settlement'::text AS accounting_source,
+        event.paid_at AS accounting_at,
+        event.id AS payment_event_id,
+        event.paid_at AS payment_event_paid_at,
+        event.amount AS payment_event_amount,
+        event.currency AS payment_event_currency,
+        event.evidence_text AS payment_event_evidence_text,
+        event.source_user_id AS payment_event_source_user_id,
+        '月结付款'::varchar AS expense_type,
+        '月结付款'::varchar AS operation_expense,
+        NULL::varchar AS employee_benefits_expense,
+        NULL::varchar AS bonus_expense,
+        NULL::varchar AS salary_expense,
+        NULL::varchar AS administrative_expense,
+        NULL::jsonb AS individual_income_tax_by_department,
+        NULL::jsonb AS it_operation_by_department,
+        event.evidence_text AS matter_description,
+        event.amount,
+        event.amount AS detail_summary_amount,
+        event.base_currency_amount
+      FROM approval_expense_monthly_settlement monthly
+      JOIN approval_expense_payment_events event ON event.business_id = monthly.business_id
+      ${paymentEventDateWhereFor('event')}
+        AND event.expense_kind = 'monthly_settlement'
+        AND event.status = 'confirmed'
+        AND event.rule_version = 'authorized-comment-v1'
+        AND event.source_type = 'comment_explicit_amount'
+        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}` : ''}
     `, params);
     return result.rows;
   } finally {
@@ -1368,6 +1468,12 @@ async function fetchApprovedExpenseSummaryFresh(dateRange) {
     for (const item of verifiedDetails.filter((e) => e.expense_kind === 'purchase' && isAccountableExpense(e))) {
       const queryMonth = approvedDetailMonth(item);
       const key = `${item.accounting_source || 'completed_approval'}__purchase__${item.business_id || ''}__${item.payment_event_id || item.process_instance_id || ''}__${queryMonth}`;
+      detailMap.set(key, { ...item, query_month: queryMonth });
+    }
+
+    for (const item of verifiedDetails.filter((e) => e.expense_kind === 'monthly_settlement' && isAccountableExpense(e))) {
+      const queryMonth = approvedDetailMonth(item);
+      const key = `${item.accounting_source || 'monthly_settlement'}__monthly_settlement__${item.business_id || ''}__${item.payment_event_id || item.process_instance_id || ''}__${queryMonth}`;
       detailMap.set(key, { ...item, query_month: queryMonth });
     }
   } catch (error) {

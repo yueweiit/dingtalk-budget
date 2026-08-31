@@ -146,8 +146,8 @@ const toNumber = (value) => {
 const buildAllocatedExpenseRows = (items = []) => items.map((item) => ({
   department: item.department,
   month: item.month,
-  baseCurrencyAmount: toNumber(item.operationTotal) + toNumber(item.purchaseTotal),
-  amount: toNumber(item.operationTotal) + toNumber(item.purchaseTotal),
+  baseCurrencyAmount: toNumber(item.operationTotal) + toNumber(item.purchaseTotal) + toNumber(item.monthlySettlementTotal),
+  amount: toNumber(item.operationTotal) + toNumber(item.purchaseTotal) + toNumber(item.monthlySettlementTotal),
 }));
 
 const CustomTooltip = ({ active, payload, label }) => {
