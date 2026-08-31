@@ -919,6 +919,9 @@ function applyExpenseDetailReportingOverlay(details) {
 function filterExpenseDetailsForReport(details, budgetedDepartmentMonths = new Set()) {
   const visibleDetails = (details || []).flatMap((item) => {
     const month = item.query_month || approvedDetailMonth(item);
+    if (item?.accounting_source === 'monthly_settlement' || item?.expense_kind === 'monthly_settlement') {
+      return [item];
+    }
     const splits = Array.isArray(item?.expense_splits) ? item.expense_splits : [];
     if (splits.length === 0) {
       return shouldIncludeDepartmentExpense(
@@ -1431,7 +1434,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         event.base_currency_amount
       FROM approval_expense_monthly_settlement monthly
       JOIN approval_expense_payment_events event ON event.business_id = monthly.business_id
-      ${paymentEventDateWhereFor('event')}
+      ${paymentDateWhereFor('event')}
         AND event.expense_kind = 'monthly_settlement'
         AND event.status = 'confirmed'
         AND event.rule_version = 'authorized-comment-v1'

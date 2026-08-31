@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-import { summarizeApprovedDetails } from '../routes/list.js';
+import { filterExpenseDetailsForReport, summarizeApprovedDetails } from '../routes/list.js';
 
 test('summarizes a monthly settlement on its payment month under the settlement department', () => {
   const [summary] = summarizeApprovedDetails([{
@@ -67,6 +67,21 @@ test('does not apply the ordinary execution-region filter to a monthly settlemen
   }], new Set(['id:dept-test__2026-08']));
 
   assert.equal(summary.monthlySettlementTotal, 300);
+});
+
+test('keeps monthly settlement details when the department has a budget but no execution region', () => {
+  const details = filterExpenseDetailsForReport([{
+    expense_kind: 'monthly_settlement',
+    accounting_source: 'monthly_settlement',
+    query_month: '2026-08',
+    business_id: 'monthly-settlement-report-detail',
+    applicant_department: '测试部门',
+    applicant_department_id: 'dept-test',
+    amount: 300,
+  }], new Set(['id:dept-test__2026-08']));
+
+  assert.equal(details.length, 1);
+  assert.equal(details[0].business_id, 'monthly-settlement-report-detail');
 });
 
 test('monthly settlement SQL only uses authorized payment events and does not use linked approvals', async () => {
