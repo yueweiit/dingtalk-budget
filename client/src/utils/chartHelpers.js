@@ -230,7 +230,7 @@ export function buildRegionDistribution(productionRecords, nonProductionRecords)
  * 预算执行状态分布（按部门），用于横向堆叠条形图
  * 返回格式: [{ deptName, executed, inProgress, unexecuted, total }]
  */
-export function buildExecutionStatus(executionRows, productionRecords, nonProductionRecords) {
+export function buildExecutionStatus(executionRows, pendingExpenseRecords = []) {
   const deptMap = new Map();
 
   // 1. 从 executionRows 汇总已执行金额 + 预算总额
@@ -249,31 +249,22 @@ export function buildExecutionStatus(executionRows, productionRecords, nonProduc
     deptMap.set(key, cur);
   }
 
-  // 2. 从原始预算记录汇总「审批中」金额
-  const addPending = (records) => {
-    for (const r of records) {
-      if (isSharedBudgetChild(r)) continue;
-      if (r.status === '审批中') {
-        const dept = departmentDisplayName(r);
-        const key = departmentIdentityKey(r);
-        const cur = deptMap.get(key) || {
-          deptName: dept,
-          departmentIdentityKey: key,
-          totalBudget: 0,
-          executed: 0,
-          inProgress: 0,
-        };
-        cur.inProgress += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
-        // 审批中的记录也可能已计入 totalBudget，不需要再加一次
-        if (!executionRows.some((er) => departmentIdentityKey(er) === key)) {
-          cur.totalBudget += toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
-        }
-        deptMap.set(key, cur);
-      }
-    }
-  };
-  addPending(productionRecords);
-  addPending(nonProductionRecords);
+  // 2. 审批中只来自普通支出表单，预算申请金额不能进入此列。
+  for (const row of pendingExpenseRecords || []) {
+    const expenseKind = String(row?.expense_kind || row?.expenseKind || '').trim().toLowerCase();
+    if (!['operation', 'purchase', 'monthly_settlement'].includes(expenseKind)) continue;
+    const dept = departmentDisplayName(row);
+    const key = departmentIdentityKey(row);
+    const cur = deptMap.get(key) || {
+      deptName: dept,
+      departmentIdentityKey: key,
+      totalBudget: 0,
+      executed: 0,
+      inProgress: 0,
+    };
+    cur.inProgress += toAmount(row.pending_amount || row.pendingAmount || row.amount);
+    deptMap.set(key, cur);
+  }
 
   // 3. 计算未执行
   return [...deptMap.values()]

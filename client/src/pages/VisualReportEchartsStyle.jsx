@@ -256,7 +256,7 @@ export default function VisualReportEchartsStyle({ onBack }) {
       execRate: buildExecutionRateData(execRows),
       deptComp: buildDeptApprovedComparison(execRows),
       regionDist: buildRegionChartRows2(reportData.production || [], reportData.nonProduction || [], allocatedExpenseRows),
-      execStatus: buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []),
+      execStatus: buildExecutionStatus(execRows, reportData.pendingExpenses || []),
       stats: buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows),
     };
   }, [reportData, trendReportData, startDate, endDate]);

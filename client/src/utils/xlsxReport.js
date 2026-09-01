@@ -734,7 +734,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
           month,
           businessId: item.business_id,
           title: item.title,
-          matterDescription: firstValue(item, ['matter_description', 'matterDescription'], ''),
+          matterDescription: expenseDetailText(item),
           amount: firstValue(item, ['amount', 'detail_summary_amount', 'source_amount', 'total_amount', 'base_currency_amount'], ''),
           baseCurrencyAmount: baseAmount,
           approvalStatus: item.approval_status,
@@ -766,7 +766,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
         month,
         businessId: item.business_id,
         title: item.title,
-        matterDescription: firstValue(item, ['matter_description', 'matterDescription'], ''),
+        matterDescription: expenseDetailText(item),
         amount: entry.amount,
         baseCurrencyAmount: entry.amount,
         approvalStatus: item.approval_status,
@@ -784,6 +784,48 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
       }));
     })
     .sort((a, b) => String(a.month).localeCompare(String(b.month)) || String(a.department).localeCompare(String(b.department)));
+};
+
+export const expenseDetailText = (row) => {
+  const accountingSource = String(firstValue(row, ['accounting_source', 'accountingSource'], '')).trim().toLowerCase();
+  const rawKind = String(firstValue(row, ['expense_kind', 'expenseKind'], '')).trim().toLowerCase();
+  const kind = accountingSource === 'monthly_settlement'
+    || rawKind === 'monthly_settlement'
+    || rawKind.includes('月结付款')
+    || rawKind.includes('monthly settlement')
+    ? 'monthly_settlement'
+    : rawKind === 'purchase'
+      || rawKind.includes('采购支出')
+      || rawKind.includes('gastos de compra')
+      ? 'purchase'
+      : rawKind;
+  const sourceFields = kind === 'purchase'
+    ? [
+      'purchase_detail_description',
+      'purchaseDetailDescription',
+      'specification_requirement_description',
+      'specificationRequirementDescription',
+      'matterDescription',
+      'matter_description',
+    ]
+    : kind === 'monthly_settlement'
+      ? [
+        'payment_reason',
+        'paymentReason',
+        'matterDescription',
+        'matter_description',
+      ]
+      : ['matterDescription', 'matter_description'];
+
+  if (kind === 'purchase' || kind === 'monthly_settlement') {
+    return String(firstValue(row, sourceFields, '')).trim();
+  }
+  return String(firstValue(row, [...sourceFields, 'title', 'expenseKind', 'expense_kind'], '未分类')).trim();
+};
+
+const isPendingBudgetRecord = (row) => {
+  const status = String(firstValue(row, ['status', 'approval_status'], '')).trim().toLowerCase();
+  return ['审批中', 'pending', 'running', 'processing', 'in_progress'].includes(status);
 };
 
 export const buildExecutionRows = ({ productionRows, operationRows, approvedExpenses, reportMonth }) => {
@@ -961,7 +1003,7 @@ export const buildExpenseShareRows = (approvedDetailRows) => {
     departmentIdentityKey: departmentIdentityKey(row),
     month: row.month || 'Unspecified',
     category: row.expenseKind || '未分类',
-    detail: row.matterDescription || row.title || row.expenseKind || '未分类',
+    detail: expenseDetailText(row),
     amount: toAmount(row.baseCurrencyAmount || row.amount),
     formNo: row.businessId,
   }));
@@ -969,7 +1011,7 @@ export const buildExpenseShareRows = (approvedDetailRows) => {
   return groupShareRows(rows, ['departmentIdentityKey', 'month'], 'amount');
 };
 
-export const createBudgetReportWorkbook = ({ production = [], nonProduction = [], approvedExpenses = [], approvedExpenseDetails = [], reportStartDate = '', reportEndDate = '' }) => {
+export const createBudgetReportWorkbook = ({ production = [], nonProduction = [], pendingProduction = [], pendingNonProduction = [], pendingExpenses = [], approvedExpenses = [], approvedExpenseDetails = [], reportStartDate = '', reportEndDate = '' }) => {
   const operationRows = buildOperationRows(nonProduction);
   const productionRows = buildProductionRows(production);
   const reportMonth = resolveReportMonth(reportStartDate, reportEndDate);
@@ -979,6 +1021,10 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   const expenseShareRows = buildExpenseShareRows(approvedDetailRows);
   const productionBudgetRecords = production.filter((row) => !isSharedBudgetChild(row));
   const nonProductionBudgetRecords = nonProduction.filter((row) => !isSharedBudgetChild(row));
+  const pendingBudgetRecords = [...pendingProduction, ...pendingNonProduction]
+    .filter((row) => !isSharedBudgetChild(row) && isPendingBudgetRecord(row));
+  const pendingOrdinaryExpenseRecords = pendingExpenses
+    .filter((row) => !isSharedBudgetChild(row) && isPendingBudgetRecord(row));
 
   const operationSheetRows = [
     ['序号', '所属部门', '预算归属', '预算类型', '申请日期', '预算月份', '预算项目', '预算金额', '币种', '明细项目', '明细金额', '计算依据', '表单编号', '状态', '创建日期'],
@@ -1093,15 +1139,14 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   );
 
   const approvedDetailSheetRows = [
-    ['序号', '支出类型', '所属部门', '汇总部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '记账日期', '记账来源', '付款期次', '付款金额', '付款评论', '业务动作', '备注'],
+    ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '记账日期', '记账来源', '付款期次', '付款金额', '付款评论', '业务动作', '备注'],
     ...approvedDetailRows.map((row, index) => [
       index + 1,
       row.expenseKind,
       row.department,
-      row.rollupDepartment || row.department,
       row.month,
       row.businessId,
-      row.title,
+      expenseDetailText(row),
       row.amount,
       row.baseCurrencyAmount,
       row.approvalStatus,
@@ -1240,23 +1285,29 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     cur.executed += toAmount(row.totalApproved);
     execStatusMap.set(key, cur);
   }
-  for (const r of productionBudgetRecords) {
-    if (r.status === '审批中') {
-      const dept = departmentDisplayName(r);
-      const key = departmentIdentityKey(r);
-      const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
-      cur.inProgress += toAmount(r.total_amount || r.monthly_budget_amount);
-      execStatusMap.set(key, cur);
+  const representedFormNos = new Set([
+    ...productionBudgetRecords,
+    ...nonProductionBudgetRecords,
+  ].map((row) => String(row.form_no || row.formNo || '').trim()).filter(Boolean));
+  for (const r of pendingBudgetRecords) {
+    const dept = departmentDisplayName(r);
+    const key = departmentIdentityKey(r);
+    const amount = toAmount(r.total_amount || r.budget_amount || r.monthly_budget_amount);
+    const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
+    cur.inProgress += amount;
+    if (!representedFormNos.has(String(r.form_no || r.formNo || '').trim())) {
+      cur.totalBudget += amount;
     }
+    execStatusMap.set(key, cur);
   }
-  for (const r of nonProductionBudgetRecords) {
-    if (r.status === '审批中') {
-      const dept = departmentDisplayName(r);
-      const key = departmentIdentityKey(r);
-      const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
-      cur.inProgress += toAmount(r.total_amount || r.budget_amount);
-      execStatusMap.set(key, cur);
-    }
+  for (const r of pendingOrdinaryExpenseRecords) {
+    const dept = departmentDisplayName(r);
+    const key = departmentIdentityKey(r);
+    const amount = toAmount(r.pending_amount || r.pendingAmount || r.amount || r.base_currency_amount);
+    if (amount <= 0) continue;
+    const cur = execStatusMap.get(key) || { deptName: dept, departmentIdentityKey: key, totalBudget: 0, executed: 0, inProgress: 0 };
+    cur.inProgress += amount;
+    execStatusMap.set(key, cur);
   }
   const execStatusRows = [...execStatusMap.values()]
     .map((item) => ({
@@ -1296,7 +1347,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '部门执行率', rows: execRateSheetRows, widths: [8, 28, 14, 18, 18, 18, 12] },
     { name: '部门预算占比', rows: budgetShareSheetRows, widths: [8, 28, 14, 18, 28, 16, 18, 12, 10] },
     { name: '部门支出占比', rows: expenseShareSheetRows, widths: [8, 28, 14, 14, 40, 18, 20, 12, 10] },
-    { name: '实际支出明细', rows: approvedDetailSheetRows, widths: [8, 12, 28, 14, 24, 36, 14, 18, 14, 14, 14, 16, 14] },
+    { name: '实际支出明细', rows: approvedDetailSheetRows, widths: [8, 12, 28, 14, 24, 36, 14, 18, 14, 14, 14, 16, 14, 14, 14, 14, 22, 14, 24] },
     { name: '非生产预算明细', rows: operationSheetRows, widths: [8, 22, 16, 14, 14, 18, 14, 10, 24, 14, 34, 22, 14, 14] },
   ];
 

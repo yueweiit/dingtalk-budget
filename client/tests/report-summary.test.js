@@ -4,7 +4,39 @@ import {
   buildExecutionRows,
   buildReportSummaryRows,
 } from '../src/utils/xlsxReport.js';
-import { buildDeptApprovedComparison, buildSummaryStats } from '../src/utils/chartHelpers.js';
+import { buildDeptApprovedComparison, buildExecutionStatus, buildSummaryStats } from '../src/utils/chartHelpers.js';
+
+test('execution status uses pending ordinary expenses and ignores pending budget applications', () => {
+  const rows = buildExecutionStatus([
+    {
+      deptName: '悦为智能 YW Tech_Ai',
+      departmentId: 'yw-1',
+      budgetMonth: '2026-09',
+      totalBudget: 200259,
+      totalApproved: 100434.02,
+    },
+  ], [
+    {
+      deptName: '悦为智能 YW Tech_Ai',
+      departmentId: 'yw-1',
+      expense_kind: 'operation',
+      status: '审批中',
+      pending_amount: 101155,
+    },
+  ]);
+
+  assert.equal(rows[0].inProgress, 101155);
+  assert.equal(rows[0].totalBudget, 200259);
+  assert.equal(rows[0].unexecuted, 0);
+
+  const budgetApplication = buildExecutionStatus([], [{
+    deptName: '悦为智能 YW Tech_Ai',
+    departmentId: 'yw-1',
+    status: '审批中',
+    pending_amount: 101155,
+  }]);
+  assert.deepEqual(budgetApplication, []);
+});
 
 test('新增统计项只汇总有提交预算部门的支出，但保留原实际支出合计', async () => {
   const productionRows = [

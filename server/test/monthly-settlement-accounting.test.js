@@ -89,6 +89,9 @@ test('monthly settlement SQL only uses authorized payment events and does not us
   assert.match(source, /event\.expense_kind = 'monthly_settlement'/);
   assert.match(source, /event\.paid_at AS accounting_at/);
   assert.match(source, /monthly\.applicant_department/);
+  assert.match(source, /detail\.payment_reason/);
+  assert.match(source, /monthlySettlementPaymentReasonSql/);
+  assert.doesNotMatch(source, /NULLIF\(\$\{monthlySettlementPaymentReasonSql\('monthly', hasMonthlySettlementDetailsTable\)\}, ''\),\s*event\.evidence_text/);
   assert.doesNotMatch(source, /monthly\.resolution_status = 'resolved'/);
   assert.doesNotMatch(source, /monthlyLinkedApprovalExclusion/);
   assert.doesNotMatch(source, /approval_expense_monthly_settlement_links monthly_link/);

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildApprovedDetailRows,
   buildExpenseShareRows,
+  expenseDetailText,
 } from '../src/utils/xlsxReport.js';
 import {
   buildPaymentSequenceMap,
@@ -82,4 +83,63 @@ test('部门支出占比使用事项说明而不是表单标题', () => {
 
   const [shareRow] = buildExpenseShareRows([detailRow]);
   assert.equal(shareRow.detail, '事项说明组件中的真实内容');
+});
+
+test('采购明细使用规格明细需求说明而不是审批标题', () => {
+  assert.equal(expenseDetailText({
+    expense_kind: 'purchase',
+    title: '某人提交的采购支出',
+    specification_requirement_description: '采购规格明细需求说明',
+  }), '采购规格明细需求说明');
+});
+
+test('实际支出明细行保留采购组件和月结付款说明', () => {
+  const rows = buildApprovedDetailRows([
+    {
+      expense_kind: 'purchase',
+      business_id: 'PURCHASE-DETAIL-001',
+      title: '采购审批标题',
+      specification_requirement_description: '采购组件内容',
+      matter_description: '',
+      amount: 70,
+    },
+    {
+      accounting_source: 'monthly_settlement',
+      expense_kind: 'monthly_settlement',
+      business_id: 'MONTHLY-DETAIL-001',
+      title: '月结审批标题',
+      payment_reason: '月结付款说明内容',
+      matter_description: '已支付640元',
+      amount: 640,
+    },
+  ]);
+
+  assert.deepEqual(rows.map((row) => row.matterDescription), ['采购组件内容', '月结付款说明内容']);
+});
+
+test('部门支出占比识别显示态采购类型并使用规格明细需求说明', () => {
+  const [row] = buildExpenseShareRows(buildApprovedDetailRows([{
+    expense_kind: 'purchase',
+    business_id: 'PURCHASE-SHARE-001',
+    title: '某人提交的采购支出 Gastos de compra',
+    matter_description: '规格组件内容',
+    amount: 13332,
+  }]));
+
+  assert.equal(row.category, '采购支出');
+  assert.equal(row.detail, '规格组件内容');
+});
+
+test('采购和月结缺少业务说明时不回退到审批标题', () => {
+  assert.equal(expenseDetailText({ expense_kind: 'purchase', title: '采购审批标题' }), '');
+  assert.equal(expenseDetailText({ accounting_source: 'monthly_settlement', title: '月结审批标题' }), '');
+});
+
+test('月结付款明细使用付款说明而不是付款评论', () => {
+  assert.equal(expenseDetailText({
+    accounting_source: 'monthly_settlement',
+    title: '月结付款',
+    payment_reason: '8月办公费用结算',
+    matter_description: '已支付640元',
+  }), '8月办公费用结算');
 });

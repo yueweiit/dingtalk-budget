@@ -44,7 +44,9 @@ const AUTHORIZED_PAYMENT_EVENT_USER_IDS = Object.freeze(
 if (AUTHORIZED_PAYMENT_EVENT_USER_IDS.length === 0) {
   throw new Error('DINGTALK_PAYMENT_EVENT_USER_IDS must contain at least one user ID');
 }
-const AUTHORIZED_PAYMENT_EVENT_USER_SQL = `event.source_user_id IN (${AUTHORIZED_PAYMENT_EVENT_USER_IDS.map((id) => `'${id}'`).join(', ')})`;
+const AUTHORIZED_PAYMENT_USER_IDS_SQL = AUTHORIZED_PAYMENT_EVENT_USER_IDS.map((id) => `'${id}'`).join(', ');
+const AUTHORIZED_PAYMENT_EVENT_USER_SQL = `event.source_user_id IN (${AUTHORIZED_PAYMENT_USER_IDS_SQL})`;
+const AUTHORIZED_PAYMENT_APPROVER_USER_SQL = `flow.approver_userid IN (${AUTHORIZED_PAYMENT_USER_IDS_SQL})`;
 
 const columnCache = new Map();
 const approvedExpenseSummaryCache = new Map();
@@ -196,6 +198,55 @@ function normalizeRegion(value) {
 
 function isChinaExecutionRegion(value) {
   return normalizeRegion(value) === 'CN';
+}
+
+function isPendingBudgetStatusSql(alias) {
+  const status = `LOWER(BTRIM(COALESCE(${alias}.status, '')))`;
+  return `(${status} IN ('\u5ba1\u6279\u4e2d', 'pending', 'running', 'processing', 'in_progress'))`;
+}
+
+function isPendingExpenseStatusSql(alias) {
+  const status = `LOWER(BTRIM(COALESCE(NULLIF(${alias}.approval_status, ''), NULLIF(${alias}.raw_data->>'status', ''), '')))`;
+  return `(${status} IN ('\u5ba1\u6279\u4e2d', 'pending', 'running', 'processing', 'in_progress'))`;
+}
+
+function purchaseMatterDescriptionSql(alias, hasProcessorsTable) {
+  const processorDescription = hasProcessorsTable
+    ? `(SELECT STRING_AGG(NULLIF(BTRIM(processor.specification_requirement_description), ''), '；' ORDER BY processor.row_no)
+            FROM approval_expense_purchase_processors processor
+            WHERE processor.purchase_id = ${alias}.id)`
+    : 'NULL';
+  const formComponentDescription = `(SELECT STRING_AGG(NULLIF(BTRIM(component->>'value'), ''), '；' ORDER BY ordinality)
+          FROM jsonb_array_elements(
+            CASE
+              WHEN jsonb_typeof(${alias}.raw_data->'formComponentValues') = 'array'
+                THEN ${alias}.raw_data->'formComponentValues'
+              ELSE '[]'::jsonb
+            END
+          ) WITH ORDINALITY AS fields(component, ordinality)
+          WHERE component->>'name' IN (
+            '规格明细需求说明Descripción de las necesidades de detalles',
+            '规格明细需求说明',
+            'Descripción de las necesidades de detalles'
+          ))`;
+
+  // Purchase details live in the processor child rows. Keep raw-data fallbacks
+  // for older records that predate the structured child table.
+  return `COALESCE(
+    NULLIF(${processorDescription}, ''),
+    NULLIF(${formComponentDescription}, ''),
+    NULLIF(${alias}.raw_data->>'specificationRequirementDescription', ''),
+    NULLIF(${alias}.raw_data->>'specification_requirement_description', '')
+  )`;
+}
+
+function monthlySettlementPaymentReasonSql(alias, hasDetailsTable) {
+  // Monthly-settlement descriptions are stored on the payment-detail rows,
+  // not on the payment event comment.
+  if (!hasDetailsTable) return 'NULL';
+  return `(SELECT STRING_AGG(NULLIF(BTRIM(detail.payment_reason), ''), '；' ORDER BY detail.row_no)
+          FROM approval_expense_monthly_settlement_details detail
+          WHERE detail.settlement_id = ${alias}.id)`;
 }
 
 function reportingDepartmentKey(department, month) {
@@ -1079,6 +1130,8 @@ export async function fetchApprovalExpenseDetails(dateRange) {
   const params = [];
   let hasPaymentEventTable = false;
   let hasMonthlySettlementTable = false;
+  let hasMonthlySettlementDetailsTable = false;
+  let hasPurchaseProcessorsTable = false;
   const startDate = expandMonthDate(dateRange.startDate, false);
   const endDate = expandMonthDate(dateRange.endDate, true);
   const startParam = startDate ? params.push(startDate) : null;
@@ -1152,11 +1205,15 @@ export async function fetchApprovalExpenseDetails(dateRange) {
              AND table_name = 'approval_expense_payment_events'
              AND column_name = 'rule_version'
          ) AS has_rule_version,
-         to_regclass('public.approval_expense_monthly_settlement') AS monthly_table`
+          to_regclass('public.approval_expense_monthly_settlement') AS monthly_table,
+          to_regclass('public.approval_expense_monthly_settlement_details') AS monthly_details_table,
+          to_regclass('public.approval_expense_purchase_processors') AS purchase_processors_table`
     );
     hasPaymentEventTable = Boolean(capability.rows[0]?.table_name) && Boolean(capability.rows[0]?.has_rule_version);
     // Linked approvals are audit-only. They must never gate monthly-settlement accounting.
     hasMonthlySettlementTable = hasPaymentEventTable && Boolean(capability.rows[0]?.monthly_table);
+    hasMonthlySettlementDetailsTable = hasMonthlySettlementTable && Boolean(capability.rows[0]?.monthly_details_table);
+    hasPurchaseProcessorsTable = Boolean(capability.rows[0]?.purchase_processors_table);
     const result = await client.query(`
       SELECT
         'operation'::text AS expense_kind,
@@ -1335,7 +1392,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS administrative_expense,
         NULL::jsonb AS individual_income_tax_by_department,
         NULL::jsonb AS it_operation_by_department,
-        NULL::text AS matter_description,
+         ${purchaseMatterDescriptionSql('p', hasPurchaseProcessorsTable)} AS matter_description,
         NULL::numeric AS amount,
         event.amount AS detail_summary_amount,
         event.base_currency_amount
@@ -1384,7 +1441,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS administrative_expense,
         NULL::jsonb AS individual_income_tax_by_department,
         NULL::jsonb AS it_operation_by_department,
-        NULL::text AS matter_description,
+         ${purchaseMatterDescriptionSql('p', hasPurchaseProcessorsTable)} AS matter_description,
         NULL::numeric AS amount,
         p.detail_summary_amount,
         p.base_currency_amount
@@ -1428,7 +1485,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS administrative_expense,
         NULL::jsonb AS individual_income_tax_by_department,
         NULL::jsonb AS it_operation_by_department,
-        event.evidence_text AS matter_description,
+        ${monthlySettlementPaymentReasonSql('monthly', hasMonthlySettlementDetailsTable)} AS matter_description,
         event.amount,
         event.amount AS detail_summary_amount,
         event.base_currency_amount
@@ -1717,6 +1774,245 @@ async function fetchNonProductionBudgetRows(client, filters = {}, paging = null,
   return withBudgetDepartmentPresentation(result.rows);
 }
 
+async function fetchPendingBudgetRows(client, budgetType, filters = {}) {
+  const alias = budgetType === 'production' ? 'p' : 'n';
+  const table = budgetType === 'production' ? 'production_budget' : 'non_production_budget';
+  const detailExists = budgetType === 'production'
+    ? `(
+        EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
+        OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
+        OR EXISTS (SELECT 1 FROM budget_labor bl WHERE bl.form_no = p.form_no)
+      )`
+    : `(
+        EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
+        OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
+        OR EXISTS (SELECT 1 FROM budget_operation op WHERE op.form_no = n.form_no)
+      )`;
+  const params = [];
+  let whereClause = 'WHERE 1=1';
+  const startDate = expandMonthDate(filters.startDate, false);
+  const endDate = expandMonthDate(filters.endDate, true);
+  const submittedAt = `COALESCE(${alias}.application_date, ${alias}.create_time::date)`;
+  if (startDate) {
+    whereClause += ` AND ${submittedAt} >= $${params.length + 1}::date`;
+    params.push(startDate);
+  }
+  if (endDate) {
+    whereClause += ` AND ${submittedAt} <= $${params.length + 1}::date`;
+    params.push(endDate);
+  }
+  const approvalFlowCapability = await client.query(
+    `SELECT to_regclass('public.approval_flow') AS table_name`
+  );
+  const paymentConfirmationSql = approvalFlowCapability.rows[0]?.table_name
+    ? `EXISTS (
+         SELECT 1
+         FROM approval_flow flow
+         WHERE (flow.form_no = ${alias}.form_no
+                OR (flow.process_instance_id IS NOT NULL
+                    AND flow.process_instance_id = ${alias}.process_instance_id))
+           AND COALESCE(flow.approve_opinion, '') ~* '已支付|部分支付'
+           AND ${AUTHORIZED_PAYMENT_APPROVER_USER_SQL}
+       ) AS payment_confirmation_exists`
+    : 'FALSE AS payment_confirmation_exists';
+  const result = await client.query(`
+    SELECT ${alias}.id, ${alias}.form_no, ${alias}.process_instance_id,
+           ${alias}.dept_name, ${alias}.dept_id, ${alias}.dept_source,
+           ${alias}.dept_path_ids, ${alias}.dept_path_names, ${alias}.budget_type,
+           ${alias}.declaration_month, ${alias}.budget_month, ${alias}.application_date,
+           ${alias}.execution_region, ${alias}.creator_name, ${alias}.creator_userid,
+           ${alias}.create_time, ${alias}.status,
+           ${budgetType === 'production' ? `${alias}.monthly_budget_amount, ${alias}.total_amount` : `${alias}.budget_amount, ${alias}.total_amount`},
+           ${alias}.remark, ${alias}.tenant_id,
+           ${paymentConfirmationSql}
+    FROM ${table} ${alias}
+    ${whereClause}
+      AND ${isPendingBudgetStatusSql(alias)}
+      AND ${submittedBudgetChinaWhere(alias)}
+      AND ${detailExists}
+    ORDER BY ${alias}.create_time DESC NULLS LAST, ${alias}.id DESC
+  `, params);
+  return withBudgetDepartmentPresentation(result.rows)
+    .filter((row) => !row.payment_confirmation_exists);
+}
+
+function pendingExpensePaymentCommentSql(alias, hasPaymentEventTable) {
+  const rawRecords = `COALESCE(${alias}.raw_data->'operationRecords', ${alias}.raw_data->'operation_records', '[]'::jsonb)`;
+  const rawCommentExists = `EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${rawRecords}) = 'array' THEN ${rawRecords} ELSE '[]'::jsonb END
+    ) AS record
+    WHERE COALESCE(record->>'userId', record->>'staffId', record->>'userid', '') IN (${AUTHORIZED_PAYMENT_USER_IDS_SQL})
+      AND COALESCE(record->>'remark', record->>'comment', '') ~* '已支付|部分支付'
+  )`;
+  const paymentEventExists = hasPaymentEventTable
+    ? `EXISTS (
+         SELECT 1
+         FROM approval_expense_payment_events event
+         WHERE event.business_id = ${alias}.business_id
+           AND event.status = 'confirmed'
+           AND event.rule_version = 'authorized-comment-v1'
+           AND event.source_type = 'comment_explicit_amount'
+           AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+       )`
+    : 'FALSE';
+  return `(${rawCommentExists} OR ${paymentEventExists})`;
+}
+
+function pendingExpenseDepartmentPresentation(rows) {
+  return rows.map((row) => {
+    const month = formatMonth(row.request_date || row.source_created_at || row.create_time);
+    const reporting = applyJulyDepartmentReportingOverlay(row, month);
+    const presentation = reporting.reporting_department_mapped
+      ? { departmentDisplay: reporting.reporting_dept_name, subDepartmentDisplay: '' }
+      : buildDepartmentPresentation(row);
+    return {
+      ...row,
+      ...reporting,
+      department_identity_key: reportingDepartmentKey(row, month) || presentation.identityKey,
+      department_display: presentation.departmentDisplay,
+      sub_department_display: presentation.subDepartmentDisplay,
+    };
+  });
+}
+
+async function fetchPendingExpenseRows(filters = {}) {
+  const client = new Client({
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    database: APPROVAL_DB_DATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 2000),
+  });
+  await client.connect();
+  try {
+    const params = [];
+  const startDate = expandMonthDate(filters.startDate, false);
+  const endDate = expandMonthDate(filters.endDate, true);
+  const dateWhere = (alias) => {
+    let whereClause = 'WHERE 1=1';
+    if (startDate) {
+      params.push(startDate);
+      whereClause += ` AND ${alias}.request_date >= $${params.length}::date`;
+    }
+    if (endDate) {
+      params.push(endDate);
+      whereClause += ` AND ${alias}.request_date <= $${params.length}::date`;
+    }
+    return whereClause;
+  };
+
+  const capability = await client.query(`
+    SELECT
+      to_regclass('public.approval_expense_payment_events') AS payment_event_table,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'approval_expense_payment_events'
+          AND column_name = 'rule_version'
+      ) AS has_rule_version,
+      to_regclass('public.approval_expense_monthly_settlement') AS monthly_table
+  `);
+  const hasPaymentEventTable = Boolean(capability.rows[0]?.payment_event_table)
+    && Boolean(capability.rows[0]?.has_rule_version);
+  const hasMonthlySettlementTable = Boolean(capability.rows[0]?.monthly_table);
+
+  const operationWhere = dateWhere('o');
+  const purchaseWhere = dateWhere('p');
+  const monthlyWhere = hasMonthlySettlementTable ? dateWhere('m') : '';
+  const operationPaymentComment = pendingExpensePaymentCommentSql('o', hasPaymentEventTable);
+  const purchasePaymentComment = pendingExpensePaymentCommentSql('p', hasPaymentEventTable);
+  const monthlyPaymentComment = hasMonthlySettlementTable
+    ? pendingExpensePaymentCommentSql('m', hasPaymentEventTable)
+    : '';
+
+  const monthlyUnion = hasMonthlySettlementTable ? `
+    UNION ALL
+    SELECT
+      'monthly_settlement'::text AS expense_kind,
+      m.business_id,
+      m.process_instance_id,
+      m.request_date,
+      m.applicant_department AS dept_name,
+      m.applicant_department_id AS dept_id,
+      m.applicant_department_source AS dept_source,
+      m.applicant_department_path_ids AS dept_path_ids,
+      m.applicant_department_path_names AS dept_path_names,
+      COALESCE(NULLIF(m.approval_status, ''), NULLIF(m.raw_data->>'status', '')) AS status,
+      COALESCE(NULLIF(m.form_name, ''), NULLIF(m.raw_data->>'title', ''), '') AS title,
+      COALESCE(m.base_currency_amount, m.total_amount, 0)::numeric AS pending_amount,
+      m.creator_name,
+      m.source_created_at,
+      m.created_at AS create_time,
+      m.raw_data
+    FROM approval_expense_monthly_settlement m
+    ${monthlyWhere}
+      AND ${isPendingExpenseStatusSql('m')}
+      AND NOT ${monthlyPaymentComment}
+  ` : '';
+
+  const result = await client.query(`
+    SELECT * FROM (
+      SELECT
+        'operation'::text AS expense_kind,
+        o.business_id,
+        o.process_instance_id,
+        o.request_date,
+        o.applicant_department AS dept_name,
+        o.applicant_department_id AS dept_id,
+        o.applicant_department_source AS dept_source,
+        o.applicant_department_path_ids AS dept_path_ids,
+        o.applicant_department_path_names AS dept_path_names,
+        COALESCE(NULLIF(o.approval_status, ''), NULLIF(o.raw_data->>'status', '')) AS status,
+        COALESCE(NULLIF(o.form_name, ''), NULLIF(o.raw_data->>'title', ''), '') AS title,
+        COALESCE(o.base_currency_amount, o.amount, 0)::numeric AS pending_amount,
+        o.creator_name,
+        o.source_created_at,
+        o.created_at AS create_time,
+        o.raw_data
+      FROM approval_expense_operation o
+      ${operationWhere}
+        AND ${isPendingExpenseStatusSql('o')}
+        AND ${chinaExecutionRegionWhere('o')}
+        AND NOT ${operationPaymentComment}
+
+      UNION ALL
+
+      SELECT
+        'purchase'::text AS expense_kind,
+        p.business_id,
+        p.process_instance_id,
+        p.request_date,
+        p.applicant_department AS dept_name,
+        p.applicant_department_id AS dept_id,
+        p.applicant_department_source AS dept_source,
+        p.applicant_department_path_ids AS dept_path_ids,
+        p.applicant_department_path_names AS dept_path_names,
+        COALESCE(NULLIF(p.approval_status, ''), NULLIF(p.raw_data->>'status', '')) AS status,
+        COALESCE(NULLIF(p.form_name, ''), NULLIF(p.raw_data->>'title', ''), '') AS title,
+        COALESCE(p.base_currency_amount, p.detail_summary_amount, 0)::numeric AS pending_amount,
+        p.creator_name,
+        p.source_created_at,
+        p.created_at AS create_time,
+        p.raw_data
+      FROM approval_expense_purchase p
+      ${purchaseWhere}
+        AND ${isPendingExpenseStatusSql('p')}
+        AND ${chinaExecutionRegionWhere('p')}
+        AND NOT ${purchasePaymentComment}
+      ${monthlyUnion}
+    ) pending_expenses
+    ORDER BY request_date DESC NULLS LAST, create_time DESC NULLS LAST, business_id DESC
+  `, params);
+
+    return pendingExpenseDepartmentPresentation(result.rows);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 async function countNonProductionBudgetRows(client, filters = {}) {
   const { whereClause, params } = buildBudgetWhere('n', filters);
   const cte = nonProductionBudgetCte(whereClause);
@@ -1746,10 +2042,20 @@ async function fetchAllBudgetRows(client, filters = {}) {
 }
 
 async function fetchBudgetedDepartmentMonthSet(client, filters = {}) {
-  const [productionRows, nonProductionRows] = await Promise.all([
-    fetchProductionBudgetRows(client, filters, null, { filterExecutionRegion: false }),
-    fetchNonProductionBudgetRows(client, filters, null, { filterExecutionRegion: false }),
-  ]);
+  // This helper is also used with a single export Client, which cannot run
+  // multiple queries concurrently.
+  const productionRows = await fetchProductionBudgetRows(
+    client,
+    filters,
+    null,
+    { filterExecutionRegion: false },
+  );
+  const nonProductionRows = await fetchNonProductionBudgetRows(
+    client,
+    filters,
+    null,
+    { filterExecutionRegion: false },
+  );
   return buildBudgetedDepartmentMonthSet([...productionRows, ...nonProductionRows]);
 }
 
@@ -1949,14 +2255,18 @@ router.get('/report', async (req, res) => {
 
     let productionRowsRaw;
     let nonProductionRowsRaw;
+    let pendingProductionRows;
+    let pendingNonProductionRows;
+    let pendingExpenseRows;
     let budgetedDepartmentMonths;
     try {
       const filters = { startDate, endDate };
-      [productionRowsRaw, nonProductionRowsRaw, budgetedDepartmentMonths] = await Promise.all([
-        fetchProductionBudgetRows(exportClient, filters),
-        fetchNonProductionBudgetRows(exportClient, filters),
-        fetchBudgetedDepartmentMonthSet(exportClient, filters),
-      ]);
+      productionRowsRaw = await fetchProductionBudgetRows(exportClient, filters);
+      nonProductionRowsRaw = await fetchNonProductionBudgetRows(exportClient, filters);
+      pendingProductionRows = await fetchPendingBudgetRows(exportClient, 'production', filters);
+      pendingNonProductionRows = await fetchPendingBudgetRows(exportClient, 'non-production', filters);
+      pendingExpenseRows = await fetchPendingExpenseRows(filters);
+      budgetedDepartmentMonths = await fetchBudgetedDepartmentMonthSet(exportClient, filters);
     } finally {
       await exportClient.end();
     }
@@ -1997,6 +2307,9 @@ router.get('/report', async (req, res) => {
     const responseData = {
       production: productionRows,
       nonProduction: nonProductionRows,
+      pendingProduction: pendingProductionRows,
+      pendingNonProduction: pendingNonProductionRows,
+      pendingExpenses: pendingExpenseRows,
       reportStartDate: startDate || '',
       reportEndDate: endDate || '',
     };

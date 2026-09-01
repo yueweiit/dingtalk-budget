@@ -7,13 +7,14 @@ import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts';
 
 import { getAllBudgetList, getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
-import { createBudgetReportWorkbook, saveWorkbook } from '../utils/xlsxReport';
+import { createBudgetReportWorkbook, expenseDetailText, saveWorkbook } from '../utils/xlsxReport';
 import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections';
 import { departmentMatches } from '../utils/departmentIdentity.js';
 import { expenseDetailSplitRecord } from '../utils/expenseDetailSplit.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
 import { departmentPathTitle } from '../utils/departmentPath.js';
 import { shouldDisplayBudgetListAmounts } from '../utils/budgetList.js';
+import { filterReportDataForExport } from '../utils/reportExportScope.js';
 import {
   buildPaymentCountMap,
   buildPaymentSequenceMap,
@@ -547,7 +548,7 @@ function expenseDetailBase(item, paymentSequence = 0, paymentCount = 0) {
     date: paymentEventDate(item),
     businessId: item?.business_id || '',
     title: item?.title || '',
-    description: firstNonEmpty(item?.matter_description, item?.title),
+    description: expenseDetailText(item),
     paymentEventLabel: paymentEventLabel(item, paymentSequence, paymentCount),
     paymentEvidence: paymentEventEvidence(item),
     paymentAmount: isPaymentEvent || isMonthlySettlement ? paymentAmount : null,
@@ -913,8 +914,9 @@ export default function BudgetList({ onGoToVisual }) {
     setExporting(true);
     try {
       const result = await getReportData({ startDate, endDate, includeApproved: 1 });
+      const scopedReportData = filterReportDataForExport(result.data || {}, activeTab);
       const workbook = createBudgetReportWorkbook({
-        ...(result.data || {}),
+        ...scopedReportData,
         reportStartDate: startDate,
         reportEndDate: endDate,
       });

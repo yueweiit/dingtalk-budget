@@ -241,7 +241,7 @@ export default function VisualReport({ onBack }) {
       reportData.nonProduction || [],
       approvedDetailRows,
     );
-    const execStatus = buildExecutionStatus(execRows, reportData.production || [], reportData.nonProduction || []);
+    const execStatus = buildExecutionStatus(execRows, reportData.pendingExpenses || []);
     const stats = buildSummaryStats(productionRows, operationRows, execRows, approvedDetailRows);
 
     return { deptSummary, trend, typeDist, execRate, deptComp, regionDist, execStatus, stats };
