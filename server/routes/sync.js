@@ -16,6 +16,7 @@ import {
 import { getDepartmentSnapshot, resolveServiceEntityDepartment } from '../services/department-tree.js';
 import { query, pool } from '../db/index.js';
 import { assertValidTable } from '../utils/db.js';
+import { requireRole, AUTH_ROLES } from '../services/auth.js';
 
 // getStatus 需要直接 import 用于状态对比
 function getStatusFromData(detail) {
@@ -49,6 +50,8 @@ const isProduction = process.env.NODE_ENV === 'production';
 const DEFAULT_STATUS_REFRESH_LIMIT = Number(process.env.MANUAL_STATUS_REFRESH_LIMIT || 500);
 const EXPENSE_SYNC_URL = process.env.EXPENSE_SYNC_URL || process.env.DINGTALK_EXPENSE_SYNC_URL || '';
 const EXPENSE_SYNC_TIMEOUT_MS = Number(process.env.EXPENSE_SYNC_TIMEOUT_MS || 180000);
+
+router.use(requireRole(AUTH_ROLES.SUPERADMIN));
 
 export function applyBudgetDepartmentSnapshot(budget, snapshot) {
   return snapshot ? { ...budget, ...snapshot } : budget;

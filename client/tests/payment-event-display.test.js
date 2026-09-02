@@ -143,3 +143,22 @@ test('月结付款明细使用付款说明而不是付款评论', () => {
     matter_description: '已支付640元',
   }), '8月办公费用结算');
 });
+
+test('导出人工公司分摊时使用中文分类标签', () => {
+  const [row] = buildApprovedDetailRows([{
+    accounting_source: 'completed_approval_fallback',
+    business_id: 'EXPENSE-MANUAL-001',
+    expense_kind: 'operation',
+    query_month: '2026-08',
+    base_currency_amount: 100,
+    expense_splits: [{
+      department: 'YW MOLDES MX模具',
+      department_id: '1089528309',
+      amount: 100,
+      split_type: 'manual_company_allocation',
+      note: '按打印量分摊',
+    }],
+  }]);
+
+  assert.equal(row.splitNote, '人工公司分摊拆分自 EXPENSE-MANUAL-001：按打印量分摊');
+});

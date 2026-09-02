@@ -32,6 +32,8 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
 - IT operation expense details are split by department like salary details, stored separately as `it_operation`, and included in actual expense totals without being merged into management or salary expense
 - API Key authentication, rate limiting, circuit breaker
+- User login with superadmin and department-supervisor roles
+- Backend-enforced department scope: supervisors see their department and descendants; superadmins see all data
 
 ## Tech Stack
 
@@ -92,6 +94,7 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 
 ```bash
 psql -U postgres -d budget_system -f public.sql
+psql -U postgres -d budget_system -f auth.sql
 ```
 
 ### 2. Configure Environment
@@ -128,9 +131,24 @@ Optional variables:
 | `CB_FAILURE_THRESHOLD`  | `5`                  | Failures before circuit opens  |
 | `EXPENSE_SYNC_URL`      | (empty)              | Optional expense sync service URL, e.g. `http://localhost:3002` |
 
+### User Roles
+
+Run `auth.sql` once on an existing database, then create users from the `server` directory:
+
+```bash
+AUTH_PASSWORD='change-this-password' node scripts/create-user.js --username=admin --role=superadmin
+AUTH_PASSWORD='change-this-password' node scripts/create-user.js --username=dept-manager --role=department_supervisor --department-id=1089383728 --department-name='广州凌翔'
+```
+
+`superadmin` can view all budgets, reports, exports, and approvals and can run synchronization or scheduler operations. `department_supervisor` can view only records whose department ID is the assigned ID or whose department path contains that ID; synchronization and scheduler management are denied. Department names are display snapshots only and are not used as permission keys.
+
+Account provisioning rule: `admin` is the super administrator, and each department supervisor uses the stable DingTalk department ID as the username. Passwords are supplied through `AUTH_PASSWORD` or `--password` only during initialization; plaintext passwords and the `budget_users` data are intentionally excluded from GitHub.
+
 When `DINGTALK_SYNC_SOURCE=dingtalk`, `DINGTALK_APP_KEY` and `DINGTALK_APP_SECRET` are required.
 
 When `DINGTALK_SYNC_SOURCE=oa_db`, the budget sync reads approval instances from the `dingtalk_oa` database instead of calling DingTalk directly. In that mode, set `OA_DB_HOST` / `OA_DB_PORT` / `OA_DB_DATABASE` / `OA_DB_USER` / `OA_DB_PASSWORD` if they differ from the main PostgreSQL connection.
+
+Report and Excel export authorization is enforced on the server. For a department supervisor, a form split across departments is reduced to the supervisor's permitted split rows and visible amount before summaries or workbook generation; other department names and whole-form amounts are not returned.
 
 ### 实际支出统计口径
 
@@ -169,6 +187,9 @@ Open http://localhost:5173 in your browser.
 | GET    | `/api/list/stats`               | Dashboard statistics     |
 | GET    | `/api/list/report`              | Report export data       |
 | GET    | `/api/list/approval`            | Approval flow records    |
+| POST   | `/api/auth/login`               | Create a login session |
+| GET    | `/api/auth/me`                  | Current logged-in user |
+| POST   | `/api/auth/logout`              | End the login session |
 | GET    | `/api/config/scheduler`         | Scheduler status         |
 | POST   | `/api/config/scheduler/start`   | Start scheduler          |
 | POST   | `/api/config/scheduler/stop`    | Stop scheduler           |
@@ -200,6 +221,8 @@ See [SECURITY_CHANGELOG.md](SECURITY_CHANGELOG.md) for details on:
 - Error message sanitization
 - Retry with exponential backoff
 - Circuit breaker pattern
+- Database-backed sessions and role-based department authorization
+- Department-supervisor report exports scope normalized and legacy JSON split data by department ID before aggregation, and remove unrelated creator-department metadata.
 
 ## License
 

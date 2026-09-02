@@ -1,8 +1,11 @@
 import express from 'express';
 import { getSchedulerStatus, startScheduler, stopScheduler } from '../services/scheduler.js';
+import { requireRole, AUTH_ROLES } from '../services/auth.js';
 
 const router = express.Router();
 const isProduction = process.env.NODE_ENV === 'production';
+
+router.use(requireRole(AUTH_ROLES.SUPERADMIN));
 
 router.get('/scheduler', async (req, res) => {
   try {

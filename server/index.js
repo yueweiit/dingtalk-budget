@@ -41,6 +41,8 @@ import syncRouter from './routes/sync.js';
 import listRouter from './routes/list.js';
 import configRouter from './routes/config.js';
 import dingtalkRouter from './routes/dingtalk.js';
+import authRouter from './routes/auth.js';
+import { loadSession } from './services/auth.js';
 import { startScheduler } from './services/scheduler.js';
 
 const app = express();
@@ -61,6 +63,7 @@ app.use(cors({
   origin: corsOrigin || 'http://localhost:5173',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+  credentials: true,
 }));
 app.use(express.json({ limit: '2mb' }));
 
@@ -73,12 +76,14 @@ const limiter = rateLimit({
   message: { success: false, message: '请求过于频繁，请稍后再试' },
 });
 app.use('/api/', limiter);
+app.use('/api/', loadSession);
 
 // API Key authentication
 const API_KEY = process.env.API_KEY;
 if (API_KEY) {
   app.use('/api/', (req, res, next) => {
-    if (req.path === '/health') return next();
+    if (req.path === '/health' || req.path.startsWith('/auth/')) return next();
+    if (req.authUser && !req.path.startsWith('/dingtalk')) return next();
     const key = req.headers['x-api-key'] || req.query.apiKey;
     if (key !== API_KEY) {
       return res.status(401).json({ success: false, message: '未授权：无效的 API Key' });
@@ -96,6 +101,7 @@ app.use('/api/sync', syncRouter);
 app.use('/api/list', listRouter);
 app.use('/api/config', configRouter);
 app.use('/api/dingtalk', dingtalkRouter);
+app.use('/api/auth', authRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

@@ -34,6 +34,26 @@
 npm install -g pm2
 ```
 
+### 3.1 初始化登录权限表
+
+已有 `budget_system` 数据库先执行一次：
+
+```bash
+psql -U postgres -d budget_system -f /www/wwwroot/dingtalk-budget/auth.sql
+```
+
+然后在 `server` 目录创建用户。不要把明文密码写入 Git 或 `.env`：
+
+```bash
+cd /www/wwwroot/dingtalk-budget/server
+AUTH_PASSWORD='请替换为强密码' node scripts/create-user.js --username=admin --role=superadmin
+AUTH_PASSWORD='请替换为强密码' node scripts/create-user.js --username=部门主管 --role=department_supervisor --department-id=部门ID --department-name='部门名称'
+```
+
+部门主管必须绑定稳定的钉钉部门 ID。部门名称只作为显示快照，组织架构改名后不会改变权限归属。
+
+账号规则：`admin` 为超级管理员，各部门主管账号使用对应的稳定部门 ID。密码只能在执行初始化命令时通过 `AUTH_PASSWORD` 临时传入，不能写入 GitHub、代码或提交到 `.env`。测试用弱密码不应作为生产密码，生产环境应替换为强密码。
+
 ---
 
 ## 三、部署 budget 项目

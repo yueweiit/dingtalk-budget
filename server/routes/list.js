@@ -21,6 +21,11 @@ import {
   completedApprovedExpenseWhere,
   isCompletedApprovedExpense,
 } from '../utils/completed-expense-policy.js';
+import {
+  buildDepartmentScopeSql,
+  departmentRecordVisible,
+  requireAuth,
+} from '../services/auth.js';
 
 const router = express.Router();
 const { Client } = pg;
@@ -51,6 +56,8 @@ const AUTHORIZED_PAYMENT_APPROVER_USER_SQL = `flow.approver_userid IN (${AUTHORI
 const columnCache = new Map();
 const approvedExpenseSummaryCache = new Map();
 const expenseSplitCache = new Map();
+
+router.use(requireAuth);
 
 async function getExistingColumns(tableName) {
   if (columnCache.has(tableName)) {
@@ -369,6 +376,11 @@ function expenseDepartmentRecord(item) {
       item?.department_path_names,
       item?.creator_department_path_names
     ),
+    dept_path_ids: firstNonEmpty(
+      item?.applicant_department_path_ids,
+      item?.department_path_ids,
+      item?.creator_department_path_ids
+    ),
   };
 }
 
@@ -379,6 +391,7 @@ function splitDepartmentRecord(entry, businessId) {
     dept_name: normalizeDept(entry?.department),
     dept_id: entry?.department_id,
     dept_source: entry?.department_source,
+    dept_path_ids: entry?.department_path_ids,
     dept_path_names: entry?.department_path_names,
   };
 }
@@ -531,7 +544,7 @@ async function fetchExpenseDeptSplits(details) {
     await client.connect();
     const promise = client.query(`
       SELECT business_id, split_type, department, department_id, department_source,
-             department_path_names, amount, note
+             department_path_ids, department_path_names, amount, note
       FROM approval_expense_dept_split
       WHERE business_id = ANY($1::varchar[])
     `, [businessIds]);
@@ -577,6 +590,7 @@ async function attachExpenseSplitsToDetails(details) {
       department: normalizeDept(row.department),
       department_id: row.department_id || null,
       department_source: row.department_source || 'name_only',
+      department_path_ids: row.department_path_ids || null,
       department_path_names: row.department_path_names || null,
       amount: numberValue(row.amount),
       note: row.note || '',
@@ -659,13 +673,14 @@ async function attachExpenseAmounts(records, {
   endDate,
   approvedDetails,
   budgetedDepartmentMonths = new Set(),
+  authUser = null,
 } = {}) {
   if (!records || records.length === 0) return records || [];
 
   let details = Array.isArray(approvedDetails) ? approvedDetails : [];
   if (!Array.isArray(approvedDetails)) {
     try {
-      details = (await fetchApprovedExpenseSummary({ startDate, endDate })).details;
+      details = (await fetchApprovedExpenseSummary({ startDate, endDate, authUser })).details;
     } catch {
       details = [];
     }
@@ -824,7 +839,15 @@ function extractDeptSplitEntries(item) {
       const dept = normalizeDept(entry.department);
       const amt = numberValue(entry.amount);
       if (dept && amt > 0) {
-        entries.push({ department: dept, amount: amt, splitType });
+        entries.push({
+          department: dept,
+          department_id: firstNonEmpty(entry.department_id, entry.dept_id),
+          department_source: firstNonEmpty(entry.department_source, entry.dept_source),
+          department_path_ids: firstNonEmpty(entry.department_path_ids, entry.dept_path_ids),
+          department_path_names: firstNonEmpty(entry.department_path_names, entry.dept_path_names),
+          amount: amt,
+          splitType,
+        });
       }
     }
   }
@@ -890,8 +913,10 @@ function splitRowsOf(item) {
         department: normalizeDept(entry.department),
         department_id: entry.department_id || null,
         department_source: entry.department_source || 'name_only',
+        department_path_ids: entry.department_path_ids || null,
         department_path_names: entry.department_path_names || null,
         amount: numberValue(entry.amount),
+        split_type: String(entry.split_type || entry.splitType || '').trim(),
         category: splitExpenseCategory(entry.split_type || entry.splitType),
       }))
       .filter((entry) => entry.department && entry.amount > 0);
@@ -901,10 +926,41 @@ function splitRowsOf(item) {
     department: normalizeDept(entry.department),
     department_id: entry.department_id || null,
     department_source: entry.department_source || 'name_only',
+    department_path_ids: entry.department_path_ids || null,
     department_path_names: entry.department_path_names || null,
     amount: numberValue(entry.amount),
+    split_type: entry.splitType || '',
     category: splitExpenseCategory(entry.splitType),
   }));
+}
+
+function expenseSplitRowsForScope(item) {
+  const explicitSplits = Array.isArray(item?.expense_splits) && item.expense_splits.length > 0
+    ? item.expense_splits
+    : null;
+  return explicitSplits || splitRowsOf(item);
+}
+
+function redactScopedExpenseMetadata(item) {
+  const redacted = {
+    ...item,
+    salary_by_department: null,
+    social_insurance_by_department: null,
+    office_space_by_department: null,
+    individual_income_tax_by_department: null,
+    it_operation_by_department: null,
+  };
+
+  if (firstNonEmpty(item.applicant_department_id, item.applicant_department)) {
+    redacted.creator_department = null;
+    redacted.creator_department_id = null;
+    redacted.creator_department_source = null;
+    redacted.creator_department_path_ids = null;
+    redacted.creator_department_path_names = null;
+    redacted.query_department = null;
+  }
+
+  return redacted;
 }
 
 function applyExpenseDetailReportingOverlay(details) {
@@ -967,25 +1023,94 @@ function applyExpenseDetailReportingOverlay(details) {
   });
 }
 
-function filterExpenseDetailsForReport(details, budgetedDepartmentMonths = new Set()) {
-  const visibleDetails = (details || []).flatMap((item) => {
+function scopeExpenseDetailsForUser(details, authUser = null) {
+  const rows = Array.isArray(details) ? details : [];
+  if (!authUser || authUser.role === 'superadmin') return rows;
+
+  return rows.flatMap((item) => {
+    const directDepartment = expenseDepartmentRecord(item);
+    const directVisible = departmentRecordVisible(directDepartment, authUser);
+    // Split data can come from either the normalized table or legacy JSON fields.
+    // Both sources must be reduced before any report aggregation occurs.
+    const splits = expenseSplitRowsForScope(item);
+
+    if (splits.length === 0) {
+      return directVisible ? [redactScopedExpenseMetadata(item)] : [];
+    }
+
+    const visibleSplits = splits.filter((entry) => departmentRecordVisible(
+      splitDepartmentRecord(entry, item.business_id), authUser
+    ));
+    if (!directVisible && visibleSplits.length === 0) return [];
+
+    const originalAmount = numberValue(firstNonEmpty(
+      item.base_currency_amount,
+      item.amount,
+      item.detail_summary_amount,
+      item.source_amount,
+      item.total_amount,
+    ));
+    const allSplitTotal = splits.reduce((sum, entry) => sum + numberValue(entry.amount), 0);
+    const visibleSplitTotal = visibleSplits.reduce((sum, entry) => sum + numberValue(entry.amount), 0);
+    const directRemainder = Math.max(0, Number((originalAmount - allSplitTotal).toFixed(2)));
+    const scopedAmount = directVisible
+      ? Number((directRemainder + visibleSplitTotal).toFixed(2))
+      : Number(visibleSplitTotal.toFixed(2));
+
+    const scopedItem = {
+      ...redactScopedExpenseMetadata(item),
+      amount: scopedAmount,
+      base_currency_amount: scopedAmount,
+      detail_summary_amount: scopedAmount,
+      expense_splits: visibleSplits,
+    };
+
+    if (directVisible) return [scopedItem];
+
+    // A visible split may belong to this supervisor even when the approval
+    // itself was submitted by another department. Do not expose that parent
+    // department or its whole-form amount in the report payload.
+    return [{
+      ...scopedItem,
+      department: null,
+      department_id: null,
+      dept_id: null,
+      department_resolved: null,
+      applicant_department: null,
+      applicant_department_id: null,
+      applicant_department_source: null,
+      applicant_department_path_ids: null,
+      applicant_department_path_names: null,
+      creator_department: null,
+      creator_department_id: null,
+      creator_department_source: null,
+      creator_department_path_ids: null,
+      creator_department_path_names: null,
+      query_department: null,
+    }];
+  });
+}
+
+function filterExpenseDetailsForReport(details, budgetedDepartmentMonths = new Set(), authUser = null) {
+  const visibleDetails = scopeExpenseDetailsForUser(details, authUser).flatMap((item) => {
     const month = item.query_month || approvedDetailMonth(item);
     if (item?.accounting_source === 'monthly_settlement' || item?.expense_kind === 'monthly_settlement') {
-      return [item];
+      return departmentRecordVisible(expenseDepartmentRecord(item), authUser) ? [item] : [];
     }
-    const splits = Array.isArray(item?.expense_splits) ? item.expense_splits : [];
+    const splits = expenseSplitRowsForScope(item);
     if (splits.length === 0) {
       return shouldIncludeDepartmentExpense(
         expenseDepartmentRecord(item), month, item.execution_region, budgetedDepartmentMonths
-      ) ? [item] : [];
+      ) && departmentRecordVisible(expenseDepartmentRecord(item), authUser) ? [item] : [];
     }
 
     const visibleSplits = splits.filter((entry) => (
       shouldIncludeDepartmentExpense(
         splitDepartmentRecord(entry, item.business_id), month, item.execution_region, budgetedDepartmentMonths
+      ) && departmentRecordVisible(splitDepartmentRecord(entry, item.business_id), authUser)
       )
-    ));
-    if (visibleSplits.length === 0) return [];
+    );
+    if (visibleSplits.length === 0 && !departmentRecordVisible(expenseDepartmentRecord(item), authUser)) return [];
     return [{ ...item, expense_splits: visibleSplits }];
   });
   return applyExpenseDetailReportingOverlay(visibleDetails);
@@ -1224,6 +1349,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.applicant_department,
         o.applicant_department_id,
         o.applicant_department_source,
+        o.applicant_department_path_ids,
         o.applicant_department_path_names,
         o.creator_department,
         o.applicant_department AS query_department,
@@ -1268,6 +1394,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.applicant_department,
         o.applicant_department_id,
         o.applicant_department_source,
+        o.applicant_department_path_ids,
         o.applicant_department_path_names,
         o.creator_department,
         o.applicant_department AS query_department,
@@ -1312,6 +1439,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.applicant_department,
         o.applicant_department_id,
         o.applicant_department_source,
+        o.applicant_department_path_ids,
         o.applicant_department_path_names,
         o.creator_department,
         o.applicant_department AS query_department,
@@ -1365,6 +1493,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         p.applicant_department,
         p.applicant_department_id,
         p.applicant_department_source,
+        p.applicant_department_path_ids,
         p.applicant_department_path_names,
         p.creator_department,
         p.applicant_department AS query_department,
@@ -1414,6 +1543,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         p.applicant_department,
         p.applicant_department_id,
         p.applicant_department_source,
+        p.applicant_department_path_ids,
         p.applicant_department_path_names,
         p.creator_department,
         p.applicant_department AS query_department,
@@ -1458,6 +1588,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         monthly.applicant_department,
         monthly.applicant_department_id,
         monthly.applicant_department_source,
+        monthly.applicant_department_path_ids,
         monthly.applicant_department_path_names,
         monthly.applicant_department AS creator_department,
         monthly.applicant_department AS query_department,
@@ -1509,6 +1640,8 @@ function expenseSummaryCacheKey(dateRange) {
     expandMonthDate(dateRange.startDate, false) || '',
     expandMonthDate(dateRange.endDate, true) || '',
     'completed-approval-and-payment-events',
+    dateRange.authUser?.role || 'anonymous',
+    dateRange.authUser?.departmentId || 'all',
   ].join('__');
 }
 
@@ -1541,10 +1674,11 @@ async function fetchApprovedExpenseSummaryFresh(dateRange) {
   }
 
   const details = await attachExpenseSplitsToDetails([...detailMap.values()]);
+  const visibleDetails = scopeExpenseDetailsForUser(details, dateRange.authUser);
   return {
-    items: summarizeApprovedDetails(details),
-    details,
-    reportDetails: filterExpenseDetailsForReport(details),
+    items: summarizeApprovedDetails(visibleDetails),
+    details: visibleDetails,
+    reportDetails: filterExpenseDetailsForReport(visibleDetails, new Set(), dateRange.authUser),
     warnings,
   };
 }
@@ -1567,7 +1701,7 @@ async function fetchApprovedExpenseSummary(dateRange) {
   return value;
 }
 
-function buildBudgetWhere(alias, { startDate, endDate, status } = {}, { filterExecutionRegion = true } = {}) {
+function buildBudgetWhere(alias, { startDate, endDate, status, authUser } = {}, { filterExecutionRegion = true } = {}) {
   let whereClause = 'WHERE 1=1';
   const params = [];
   let paramIndex = 1;
@@ -1592,6 +1726,11 @@ function buildBudgetWhere(alias, { startDate, endDate, status } = {}, { filterEx
     params.push(status);
     paramIndex++;
   }
+
+  const departmentScope = buildDepartmentScopeSql(alias, authUser, paramIndex);
+  whereClause += ` AND ${departmentScope.condition}`;
+  params.push(...departmentScope.params);
+  paramIndex = departmentScope.nextParamIndex;
 
   return { whereClause, params, paramIndex };
 }
@@ -1815,6 +1954,9 @@ async function fetchPendingBudgetRows(client, budgetType, filters = {}) {
            AND ${AUTHORIZED_PAYMENT_APPROVER_USER_SQL}
        ) AS payment_confirmation_exists`
     : 'FALSE AS payment_confirmation_exists';
+  const departmentScope = buildDepartmentScopeSql(alias, filters.authUser, params.length + 1);
+  whereClause += ` AND ${departmentScope.condition}`;
+  params.push(...departmentScope.params);
   const result = await client.query(`
     SELECT ${alias}.id, ${alias}.form_no, ${alias}.process_instance_id,
            ${alias}.dept_name, ${alias}.dept_id, ${alias}.dept_source,
@@ -2007,7 +2149,11 @@ async function fetchPendingExpenseRows(filters = {}) {
     ORDER BY request_date DESC NULLS LAST, create_time DESC NULLS LAST, business_id DESC
   `, params);
 
-    return pendingExpenseDepartmentPresentation(result.rows);
+    const presented = pendingExpenseDepartmentPresentation(result.rows);
+    return presented.filter((row) => departmentRecordVisible({
+      dept_id: row.dept_id,
+      dept_path_ids: row.dept_path_ids,
+    }, filters.authUser));
   } finally {
     await client.end().catch(() => {});
   }
@@ -2065,7 +2211,7 @@ router.get('/production', async (req, res) => {
     const { startDate, endDate, status, page = 1, pageSize = 20 } = req.query;
     const offset = (page - 1) * pageSize;
     const db = { query };
-    const filters = { startDate, endDate, status };
+    const filters = { startDate, endDate, status, authUser: req.authUser };
     const [dataRows, budgetedDepartmentMonths] = await Promise.all([
       fetchProductionBudgetRows(db, filters),
       fetchBudgetedDepartmentMonthSet(db, filters),
@@ -2074,6 +2220,7 @@ router.get('/production', async (req, res) => {
       startDate,
       endDate,
       budgetedDepartmentMonths,
+      authUser: req.authUser,
     });
 
     res.json({
@@ -2095,7 +2242,7 @@ router.get('/non-production', async (req, res) => {
     const { startDate, endDate, status, page = 1, pageSize = 20 } = req.query;
     const offset = (page - 1) * pageSize;
     const db = { query };
-    const filters = { startDate, endDate, status };
+    const filters = { startDate, endDate, status, authUser: req.authUser };
     const [dataRows, budgetedDepartmentMonths] = await Promise.all([
       fetchNonProductionBudgetRows(db, filters),
       fetchBudgetedDepartmentMonthSet(db, filters),
@@ -2104,6 +2251,7 @@ router.get('/non-production', async (req, res) => {
       startDate,
       endDate,
       budgetedDepartmentMonths,
+      authUser: req.authUser,
     });
 
     res.json({
@@ -2125,7 +2273,7 @@ router.get('/all', async (req, res) => {
     const { startDate, endDate, status, page = 1, pageSize = 20 } = req.query;
     const offset = (page - 1) * pageSize;
     const db = { query };
-    const filters = { startDate, endDate, status };
+    const filters = { startDate, endDate, status, authUser: req.authUser };
     const [dataRows, budgetedDepartmentMonths] = await Promise.all([
       fetchAllBudgetRows(db, filters),
       fetchBudgetedDepartmentMonthSet(db, filters),
@@ -2134,6 +2282,7 @@ router.get('/all', async (req, res) => {
       startDate,
       endDate,
       budgetedDepartmentMonths,
+      authUser: req.authUser,
     });
 
     res.json({
@@ -2170,6 +2319,26 @@ router.get('/approval', async (req, res) => {
       paramIndex++;
     }
 
+    const productionScope = buildDepartmentScopeSql('p', req.authUser, paramIndex);
+    const nonProductionScope = buildDepartmentScopeSql(
+      'n',
+      req.authUser,
+      paramIndex + productionScope.params.length
+    );
+    whereClause += ` AND (
+      EXISTS (
+        SELECT 1 FROM production_budget p
+        WHERE p.form_no = approval_flow.form_no
+          AND ${productionScope.condition}
+      )
+      OR EXISTS (
+        SELECT 1 FROM non_production_budget n
+        WHERE n.form_no = approval_flow.form_no
+          AND ${nonProductionScope.condition}
+      )
+    )`;
+    params.push(...productionScope.params, ...nonProductionScope.params);
+
     const dataResult = await query(
       `SELECT id, form_no, process_instance_id, budget_type, step,
               approver_name, approver_userid, approve_result, approve_opinion,
@@ -2196,38 +2365,40 @@ router.get('/stats', async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const db = { query };
     const [productionTotal, nonProductionTotal] = await Promise.all([
-      countProductionBudgetRows(db, {}),
-      countNonProductionBudgetRows(db, {}),
+      countProductionBudgetRows(db, { authUser: req.authUser }),
+      countNonProductionBudgetRows(db, { authUser: req.authUser }),
     ]);
 
-    const statsResult = await query(`
-      SELECT
-        (SELECT COUNT(*)
-         FROM production_budget p
-         WHERE DATE(p.create_time) = $1
-           AND ${validBudgetStatusWhere('p')}
-           AND ${submittedBudgetChinaWhere('p')}
-           AND (
-             EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
-             OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
-             OR EXISTS (SELECT 1 FROM budget_labor bl WHERE bl.form_no = p.form_no)
-           )) as production_today,
-        (SELECT COUNT(*)
-         FROM non_production_budget n
-         WHERE DATE(n.create_time) = $1
-           AND ${validBudgetStatusWhere('n')}
-           AND ${submittedBudgetChinaWhere('n')}
-           AND (
-             EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
-             OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
-             OR EXISTS (SELECT 1 FROM budget_operation op WHERE op.form_no = n.form_no)
-           )) as non_production_today
-    `, [today]);
+    const productionTodayScope = buildDepartmentScopeSql('p', req.authUser, 2);
+    const nonProductionTodayScope = buildDepartmentScopeSql('n', req.authUser, 2);
+    const [productionToday, nonProductionToday] = await Promise.all([
+      query(`SELECT COUNT(*)::int AS count
+        FROM production_budget p
+        WHERE DATE(p.create_time) = $1
+          AND ${validBudgetStatusWhere('p')}
+          AND ${submittedBudgetChinaWhere('p')}
+          AND ${productionTodayScope.condition}
+          AND (EXISTS (SELECT 1 FROM budget_material m WHERE m.form_no = p.form_no)
+            OR EXISTS (SELECT 1 FROM budget_production bp WHERE bp.form_no = p.form_no)
+            OR EXISTS (SELECT 1 FROM budget_labor bl WHERE bl.form_no = p.form_no))`,
+      [today, ...productionTodayScope.params]),
+      query(`SELECT COUNT(*)::int AS count
+        FROM non_production_budget n
+        WHERE DATE(n.create_time) = $1
+          AND ${validBudgetStatusWhere('n')}
+          AND ${submittedBudgetChinaWhere('n')}
+          AND ${nonProductionTodayScope.condition}
+          AND (EXISTS (SELECT 1 FROM budget_hr h WHERE h.form_no = n.form_no)
+            OR EXISTS (SELECT 1 FROM budget_office o WHERE o.form_no = n.form_no)
+            OR EXISTS (SELECT 1 FROM budget_operation op WHERE op.form_no = n.form_no))`,
+      [today, ...nonProductionTodayScope.params]),
+    ]);
 
     res.json({
       success: true,
       data: {
-        ...statsResult.rows[0],
+        production_today: productionToday.rows[0]?.count || 0,
+        non_production_today: nonProductionToday.rows[0]?.count || 0,
         production_total: productionTotal,
         non_production_total: nonProductionTotal,
       },
@@ -2260,7 +2431,7 @@ router.get('/report', async (req, res) => {
     let pendingExpenseRows;
     let budgetedDepartmentMonths;
     try {
-      const filters = { startDate, endDate };
+      const filters = { startDate, endDate, authUser: req.authUser };
       productionRowsRaw = await fetchProductionBudgetRows(exportClient, filters);
       nonProductionRowsRaw = await fetchNonProductionBudgetRows(exportClient, filters);
       pendingProductionRows = await fetchPendingBudgetRows(exportClient, 'production', filters);
@@ -2277,12 +2448,16 @@ router.get('/report', async (req, res) => {
     let reportApprovedDetails = null;
     const shouldIncludeApproved = String(includeApproved || '') === '1';
     if (shouldIncludeApproved) {
-      const approved = await fetchApprovedExpenseSummary({ startDate, endDate });
+      const approved = await fetchApprovedExpenseSummary({ startDate, endDate, authUser: req.authUser });
       approvedItems = rollupSharedBudgetApprovedExpenseSummaries(
         summarizeApprovedDetails(approved.details, budgetedDepartmentMonths)
       );
       approvedDetails = approved.details;
-      reportApprovedDetails = filterExpenseDetailsForReport(approved.details, budgetedDepartmentMonths);
+      reportApprovedDetails = filterExpenseDetailsForReport(
+        approved.details,
+        budgetedDepartmentMonths,
+        req.authUser
+      );
       warnings = approved.warnings;
     }
 
@@ -2293,6 +2468,7 @@ router.get('/report', async (req, res) => {
         endDate,
         approvedDetails: shouldIncludeApproved ? approvedDetails : [],
         budgetedDepartmentMonths,
+        authUser: req.authUser,
       }
     );
     const nonProductionRows = await attachExpenseAmounts(
@@ -2302,6 +2478,7 @@ router.get('/report', async (req, res) => {
         endDate,
         approvedDetails: shouldIncludeApproved ? approvedDetails : [],
         budgetedDepartmentMonths,
+        authUser: req.authUser,
       }
     );
     const responseData = {
@@ -2336,6 +2513,7 @@ export {
   buildBudgetWhere,
   buildBudgetedDepartmentMonthSet,
   filterExpenseDetailsForReport,
+  scopeExpenseDetailsForUser,
   isChinaExecutionRegion,
   reportingDepartmentKey,
   shouldIncludeDepartmentExpense,

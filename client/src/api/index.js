@@ -12,7 +12,23 @@ const api = axios.create({
   baseURL,
   timeout: 30000,
   headers,
+  withCredentials: true,
 });
+
+export async function login(username, password) {
+  const response = await api.post('/auth/login', { username, password });
+  return response.data;
+}
+
+export async function getCurrentUser() {
+  const response = await api.get('/auth/me');
+  return response.data;
+}
+
+export async function logout() {
+  const response = await api.post('/auth/logout');
+  return response.data;
+}
 
 // 同步钉钉数据
 export async function syncData(startTime, endTime, options = {}) {

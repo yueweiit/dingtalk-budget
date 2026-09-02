@@ -470,6 +470,7 @@ function splitTypeLabel(value) {
   if (type === 'office_space') return '办公场地';
   if (type === 'individual_income_tax') return '个税';
   if (type === 'it_operation') return 'IT运维费用';
+  if (type === 'manual_company_allocation') return '人工公司分摊';
   return value || '部门拆分';
 }
 
@@ -832,7 +833,7 @@ function downloadCSV(rows, filename) {
   a.href = URL.createObjectURL(blob); a.download = filename; a.click();
 }
 
-export default function BudgetList({ onGoToVisual }) {
+export default function BudgetList({ onGoToVisual, user, onLogout }) {
   const [activeTab, setActiveTab] = useState('all');
   const [startDate, setStartDate] = useState(monthStart());
   const [endDate, setEndDate] = useState(monthEnd());
@@ -969,16 +970,21 @@ export default function BudgetList({ onGoToVisual }) {
             </p>
           </div>
           <div style={styles.headerActions}>
-            <ExpenseSplitSyncButton
-              startDate={startDate}
-              endDate={endDate}
-              onSyncComplete={handleSyncComplete}
-            />
-            <SyncButton
-              startDate={startDate}
-              endDate={endDate}
-              onSyncComplete={handleSyncComplete}
-            />
+            {user?.role === 'superadmin' && (
+              <>
+                <ExpenseSplitSyncButton
+                  startDate={startDate}
+                  endDate={endDate}
+                  onSyncComplete={handleSyncComplete}
+                />
+                <SyncButton
+                  startDate={startDate}
+                  endDate={endDate}
+                  onSyncComplete={handleSyncComplete}
+                />
+              </>
+            )}
+            <button type="button" onClick={onLogout} style={styles.exportButton}>退出登录</button>
           </div>
         </div>
 

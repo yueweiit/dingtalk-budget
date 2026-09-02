@@ -5,7 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "sync:dingtalk": "node scripts/sync-dingtalk.js"
+    "test": "node --test",
+    "sync:dingtalk": "node scripts/sync-dingtalk.js",
+    "user:create": "node scripts/create-user.js"
   },
   "dependencies": {
     "axios": "^1.6.0",

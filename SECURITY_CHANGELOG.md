@@ -214,3 +214,12 @@ API_KEY=your_api_key_here
 | `RETRY_DELAY_MS` | 否 | `1000` | 重试基础延迟（指数退避） |
 | `CB_FAILURE_THRESHOLD` | 否 | `5` | 连续失败多少次触发熔断 |
 | `CB_RESET_TIMEOUT_MS` | 否 | `60000` | 熔断冷却时间（毫秒） |
+## 2026-09-02
+
+- Added database-backed login sessions with HttpOnly cookies.
+- Added `superadmin` and `department_supervisor` roles.
+- Enforced department ID/path authorization in budget lists, statistics, approvals, details, reports, and exports.
+- Report and export expense payloads now use a scoped department projection: cross-department forms expose only the supervisor's split rows and amount; the source department and whole-form amount are removed from the response.
+- Restricted synchronization and scheduler controls to superadmins.
+- Kept the DingTalk connector endpoint service-to-service behind `API_KEY`; user sessions cannot use it to bypass department scope.
+- Scoped normalized and legacy JSON expense splits by department ID before report aggregation or XLSX generation; unrelated creator-department metadata is redacted from department-supervisor payloads.

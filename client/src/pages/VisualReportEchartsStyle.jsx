@@ -171,7 +171,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   );
 };
 
-export default function VisualReportEchartsStyle({ onBack }) {
+export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
   const [startDate, setStartDate] = useState(monthStart());
   const [endDate, setEndDate] = useState(monthEnd());
   const [reportData, setReportData] = useState(null);
@@ -278,6 +278,11 @@ export default function VisualReportEchartsStyle({ onBack }) {
           {onBack && (
             <button style={styles.refreshButton} onClick={onBack}>
               返回列表
+            </button>
+          )}
+          {onLogout && (
+            <button style={styles.refreshButton} onClick={onLogout}>
+              退出登录
             </button>
           )}
         </div>

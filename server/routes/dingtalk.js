@@ -3,6 +3,7 @@ import { query } from '../db/index.js';
 import { buildConnectorDepartmentFilter } from '../services/connector-department-query.js';
 import { sharedBudgetRollupDepartment } from '../services/yw-tech-shared-budget.js';
 import { assertValidTable } from '../utils/db.js';
+import { buildDepartmentScopeSql } from '../services/auth.js';
 
 const router = express.Router();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -164,6 +165,7 @@ router.get('/querySimple', async (req, res) => {
     if (formNo) {
       whereClause = `WHERE form_no = $${paramIndex}`;
       params.push(formNo);
+      paramIndex++;
     } else {
       const resolvedDepartment = await resolveConnectorBudgetDepartment(req.query, queryMonth);
       if (resolvedDepartment.status !== 'ready') {
@@ -210,8 +212,12 @@ router.get('/querySimple', async (req, res) => {
       }
     }
 
+    const departmentScope = buildDepartmentScopeSql('b', req.authUser, paramIndex);
+    whereClause += ` AND ${departmentScope.condition}`;
+    params.push(...departmentScope.params);
+
     const result = await query(
-      `SELECT * FROM ${tableName} ${whereClause} ORDER BY create_time DESC LIMIT 1`,
+      `SELECT * FROM ${tableName} b ${whereClause} ORDER BY b.create_time DESC LIMIT 1`,
       params
     );
 
@@ -260,6 +266,11 @@ router.get('/query', async (req, res) => {
       paramIndex = departmentFilter.nextParamIndex;
     }
 
+    const departmentScope = buildDepartmentScopeSql('b', req.authUser, paramIndex);
+    whereClause += ` AND ${departmentScope.condition}`;
+    params.push(...departmentScope.params);
+    paramIndex = departmentScope.nextParamIndex;
+
     if (startDate) {
       whereClause += ` AND create_time >= $${paramIndex}`;
       params.push(convertDateFormat(startDate) + ' 00:00:00');
@@ -273,7 +284,7 @@ router.get('/query', async (req, res) => {
     }
 
     const result = await query(
-      `SELECT * FROM ${tableName} ${whereClause} ORDER BY create_time DESC LIMIT 50`,
+      `SELECT * FROM ${tableName} b ${whereClause} ORDER BY b.create_time DESC LIMIT 50`,
       params
     );
 

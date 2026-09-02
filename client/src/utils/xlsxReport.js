@@ -633,6 +633,7 @@ const splitTypeLabel = (value) => {
   if (type === 'office_space') return '办公场地';
   if (type === 'individual_income_tax') return '个税';
   if (type === 'it_operation') return 'IT运维费用';
+  if (type === 'manual_company_allocation') return '人工公司分摊';
   return value || '部门拆分';
 };
 
