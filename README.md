@@ -230,7 +230,7 @@ Private project.
 
 ## Actual Payment Event Display
 
-Actual expense reporting first reads `approval_expense_payment_events`, which stores confirmed payment facts from authorized approval comments. The accounting month is the UTC month of `paid_at`. Multiple events for one approval are ordered by payment time and displayed as installment labels such as `第 1 期付款` and `第 2 期付款`; the detail page and export keep the payment date, amount, and comment evidence.
+Actual expense reporting first reads `approval_expense_payment_events`, which stores confirmed payment facts from authorized approval comments or explicitly reviewed manual confirmations. Automatic events require an authorized source user with `comment_explicit_amount` and `authorized-comment-v1`; reviewed manual events require `manual_confirmed` and `manual-confirmed-v1`. The accounting month is the UTC month of `paid_at`. Multiple events for one approval are ordered by payment time and displayed as installment labels such as `第 1 期付款` and `第 2 期付款`; the detail page and export keep the payment date, amount, and evidence text.
 
 When no eligible payment event exists, a non-split expense falls back to the completed-and-agreed approval amount and completion time. Salary, social insurance, housing fund, office space, and individual income tax forms continue to use department split rows and do not use whole-form payment events, preventing double counting.
 
