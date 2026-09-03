@@ -6,6 +6,13 @@ const JULY_REPORTING_DEPARTMENTS = new Map([
   ['1089481630', { departmentId: '1059483024', departmentName: 'OBG 线上业务组Grupo de negocios en línea' }],
 ]);
 
+// This is a one-off historical reporting correction. Keep the source
+// department untouched and only change the reporting projection for this
+// exact business number.
+const SINGLE_RECORD_REPORTING_OVERRIDES = new Map([
+  ['202607211109000332593', { departmentId: '1089928990', departmentName: 'FC财务中心' }],
+]);
+
 function compact(value) {
   return String(value || '').trim();
 }
@@ -28,13 +35,30 @@ export function resolveJulyDepartmentReporting({ departmentId, month } = {}) {
   return { ...mapped, mapped: true };
 }
 
+export function resolveSingleRecordReporting({ businessId, formNo } = {}) {
+  const recordId = compact(businessId || formNo);
+  const mapped = SINGLE_RECORD_REPORTING_OVERRIDES.get(recordId);
+  return mapped ? { ...mapped, mapped: true } : { departmentId: '', departmentName: '', mapped: false };
+}
+
 export function applyJulyDepartmentReportingOverlay(record = {}, month = record.budget_month || record.declaration_month || record.query_month) {
+  const sourceRecordId = compact(record.business_id || record.businessId || record.form_no || record.formNo);
   const sourceDepartmentId = compact(
     record.dept_id || record.department_id || record.applicant_department_id || record.creator_department_id
   );
   const sourceDepartmentName = compact(
     record.dept_name || record.department || record.applicant_department || record.creator_department
   );
+  const singleRecordReporting = resolveSingleRecordReporting({ businessId: sourceRecordId });
+  if (singleRecordReporting.mapped) {
+    return {
+      ...record,
+      reporting_dept_id: singleRecordReporting.departmentId,
+      reporting_dept_name: singleRecordReporting.departmentName,
+      reporting_department_identity_key: `id:${singleRecordReporting.departmentId}`,
+      reporting_department_mapped: true,
+    };
+  }
   const reporting = resolveJulyDepartmentReporting({ departmentId: sourceDepartmentId, month });
 
   return {

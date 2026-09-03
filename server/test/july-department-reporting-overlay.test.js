@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   applyJulyDepartmentReportingOverlay,
   resolveJulyDepartmentReporting,
+  resolveSingleRecordReporting,
 } from '../services/july-department-reporting-overlay.js';
 import {
   applyExpenseDetailReportingOverlay,
@@ -44,6 +45,35 @@ test('does not map the Mexico OBG department or non-July data', () => {
     resolveJulyDepartmentReporting({ departmentId: '1089928990', month: '2026-08' }),
     { departmentId: '1089928990', departmentName: '', mapped: false }
   );
+});
+
+test('maps only the requested FC CN expense record in the reporting projection', () => {
+  assert.deepEqual(
+    resolveSingleRecordReporting({ businessId: '202607211109000332593' }),
+    { departmentId: '1089928990', departmentName: 'FC财务中心', mapped: true }
+  );
+  assert.deepEqual(
+    resolveSingleRecordReporting({ businessId: 'another-record' }),
+    { departmentId: '', departmentName: '', mapped: false }
+  );
+
+  const mapped = applyJulyDepartmentReportingOverlay({
+    business_id: '202607211109000332593',
+    dept_id: '1079492125',
+    dept_name: 'FC CN财务中心 Centro de finanzas',
+    query_month: '2026-08',
+  });
+  assert.equal(mapped.dept_id, '1079492125');
+  assert.equal(mapped.reporting_dept_id, '1089928990');
+  assert.equal(mapped.reporting_dept_name, 'FC财务中心');
+
+  const untouched = applyJulyDepartmentReportingOverlay({
+    business_id: 'other-record',
+    dept_id: '1079492125',
+    dept_name: 'FC CN财务中心 Centro de finanzas',
+    query_month: '2026-08',
+  });
+  assert.equal(untouched.reporting_dept_id, '1079492125');
 });
 
 test('adds reporting fields without replacing raw department fields', () => {

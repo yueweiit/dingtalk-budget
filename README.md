@@ -234,6 +234,8 @@ Actual expense reporting first reads `approval_expense_payment_events`, which st
 
 When no eligible payment event exists, a non-split expense falls back to the completed-and-agreed approval amount and completion time. Salary, social insurance, housing fund, office space, and individual income tax forms continue to use department split rows and do not use whole-form payment events, preventing double counting.
 
+The report also contains one explicit historical correction for business number `202607211109000332593`: its raw department remains `FC CN财务中心` (FC CN Finance Center), while the reporting projection places only this record under `FC财务中心` (FC Finance Center). This correction is applied by exact business number in the report/detail/export projection and does not change database data or other records.
+
 Before deployment, verify that `approval_expense_payment_events` and its indexes exist in the approval database. Code deployment does not migrate the server database automatically.
 
 The budget service accepts the comma-separated `DINGTALK_PAYMENT_EVENT_USER_IDS` environment variable for authorized payment-comment users. If it is absent, it uses the two formal users configured in code. Temporary local test users must be supplied only in the local process environment and must not be added to the production environment.
