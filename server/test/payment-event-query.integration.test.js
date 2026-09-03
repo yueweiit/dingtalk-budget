@@ -48,6 +48,38 @@ test('a current-rule payment event is the only entry for an otherwise completed 
   }
 });
 
+test('an explicitly reviewed manual confirmation is included as a payment event', { skip: !canRun }, async () => {
+  const businessId = `test-manual-payment-event-${Date.now()}`;
+  const client = createClient();
+  await client.connect();
+  try {
+    await client.query(`
+      INSERT INTO approval_expense_operation (
+        business_id, process_instance_id, applicant_department, execution_region,
+        amount, base_currency_amount, approval_status, raw_data
+      ) VALUES ($1, $2, 'Test Department', 'China', 100, 100, 'RUNNING',
+        '{"status":"RUNNING","title":"Manual payment event test"}'::jsonb)
+    `, [businessId, `pid-${businessId}`]);
+    await client.query(`
+      INSERT INTO approval_expense_payment_events (
+        business_id, process_instance_id, expense_kind, paid_at, amount, base_currency_amount,
+        currency, source_type, rule_version, source_hash, evidence_text, status
+      ) VALUES ($1, $2, 'operation', '2026-08-05T01:00:00.000Z', 30, 30,
+        'CNY', 'manual_confirmed', 'manual-confirmed-v1', $3, '已支付（人工确认）', 'confirmed')
+    `, [businessId, `pid-${businessId}`, 'manual'.repeat(13).slice(0, 64)]);
+
+    const details = await fetchApprovalExpenseDetails({ startDate: '2026-08', endDate: '2026-08' });
+    const matching = details.filter((item) => item.business_id === businessId);
+    assert.equal(matching.length, 1);
+    assert.equal(matching[0].accounting_source, 'payment_event');
+    assert.equal(Number(matching[0].base_currency_amount), 30);
+  } finally {
+    await client.query('DELETE FROM approval_expense_payment_events WHERE business_id = $1', [businessId]);
+    await client.query('DELETE FROM approval_expense_operation WHERE business_id = $1', [businessId]);
+    await client.end();
+  }
+});
+
 test('a completed non-split approval without an authorized comment uses the final-approval fallback', { skip: !canRun }, async () => {
   const businessId = `test-completed-without-comment-${Date.now()}`;
   const client = createClient();

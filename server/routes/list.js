@@ -52,6 +52,15 @@ if (AUTHORIZED_PAYMENT_EVENT_USER_IDS.length === 0) {
 const AUTHORIZED_PAYMENT_USER_IDS_SQL = AUTHORIZED_PAYMENT_EVENT_USER_IDS.map((id) => `'${id}'`).join(', ');
 const AUTHORIZED_PAYMENT_EVENT_USER_SQL = `event.source_user_id IN (${AUTHORIZED_PAYMENT_USER_IDS_SQL})`;
 const AUTHORIZED_PAYMENT_APPROVER_USER_SQL = `flow.approver_userid IN (${AUTHORIZED_PAYMENT_USER_IDS_SQL})`;
+const ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL = `(
+  (event.rule_version = 'authorized-comment-v1'
+    AND event.source_type = 'comment_explicit_amount'
+    AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL})
+  OR (
+    event.rule_version = 'manual-confirmed-v1'
+    AND event.source_type = 'manual_confirmed'
+  )
+)`;
 
 const columnCache = new Map();
 const approvedExpenseSummaryCache = new Map();
@@ -1304,9 +1313,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       FROM approval_expense_payment_events event
       WHERE event.business_id = ${alias}.business_id
         AND event.status = 'confirmed'
-        AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
-        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+        AND ${ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL}
     )` : ''}`;
 
   const client = new Client({
@@ -1475,9 +1482,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       JOIN approval_expense_operation o ON o.business_id = event.business_id
       ${paymentDateWhereFor('event')}
         AND event.status = 'confirmed'
-        AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
-        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+        AND ${ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL}
          AND NOT EXISTS (
           SELECT 1
           FROM approval_expense_dept_split event_split
@@ -1529,9 +1534,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       JOIN approval_expense_purchase p ON p.business_id = event.business_id
       ${paymentDateWhereFor('event')}
         AND event.status = 'confirmed'
-         AND event.rule_version = 'authorized-comment-v1'
-         AND event.source_type = 'comment_explicit_amount'
-         AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+        AND ${ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL}
       ` : ''}
       UNION ALL
       SELECT
@@ -1625,9 +1628,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       ${paymentDateWhereFor('event')}
         AND event.expense_kind = 'monthly_settlement'
         AND event.status = 'confirmed'
-        AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
-        AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}` : ''}
+        AND ${ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL}` : ''}
     `, params);
     return result.rows;
   } finally {
@@ -1994,9 +1995,7 @@ function pendingExpensePaymentCommentSql(alias, hasPaymentEventTable) {
          FROM approval_expense_payment_events event
          WHERE event.business_id = ${alias}.business_id
            AND event.status = 'confirmed'
-           AND event.rule_version = 'authorized-comment-v1'
-           AND event.source_type = 'comment_explicit_amount'
-           AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
+           AND ${ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL}
        )`
     : 'FALSE';
   return `(${rawCommentExists} OR ${paymentEventExists})`;
