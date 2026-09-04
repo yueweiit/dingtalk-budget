@@ -941,7 +941,6 @@ export const buildReportSummaryRows = ({
   ['奖金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
   ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
   ['个税支出金额', sumRows(executionRows, 'taxApproved').toFixed(2)],
-  ['运营支出金额（含历史IT运维）', sumRows(executionRows, 'managementApproved').toFixed(2)],
   ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
   ['有提交预算部门支出合计', sumRows(executionRows, 'budgetSubmittedApprovedTotal').toFixed(2)],
   ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],

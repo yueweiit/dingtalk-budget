@@ -41,6 +41,7 @@ test('执行报表包含奖金列且不包含 IT 运维独立列', async () => {
   const workbook = await workbookXmlText();
   assert.ok(workbook.includes('奖金支出'));
   assert.equal(workbook.includes('IT运维费用支出'), false);
+  assert.equal(workbook.includes('运营支出金额（含历史IT运维）'), false);
 });
 
 test('导出执行状态使用审批中预算，实际支出明细使用统一明细且不含汇总部门', async () => {
