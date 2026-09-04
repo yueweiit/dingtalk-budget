@@ -4,7 +4,27 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { summarizeApprovedDetails } from '../routes/list.js';
+import { bonusByDepartmentSelectSql, mergeExpenseSplitRows, summarizeApprovedDetails } from '../routes/list.js';
+
+test('uses a NULL JSONB expression when the bonus split column is unavailable', () => {
+  assert.equal(bonusByDepartmentSelectSql(true), 'o.bonus_by_department');
+  assert.equal(bonusByDepartmentSelectSql(false), 'NULL::jsonb');
+});
+
+test('falls back to persisted splits for empty embedded split arrays without duplicating populated ones', () => {
+  const rows = mergeExpenseSplitRows([
+    { business_id: 'bonus-empty', expense_splits: [] },
+    { business_id: 'bonus-embedded', expense_splits: [{ business_id: 'bonus-embedded', split_type: 'bonus', amount: 120 }] },
+  ], [
+    { business_id: 'bonus-empty', split_type: 'bonus', amount: 80 },
+    { business_id: 'bonus-embedded', split_type: 'bonus', amount: 999 },
+  ]);
+
+  assert.deepEqual(rows.map((row) => [row.business_id, row.amount]), [
+    ['bonus-embedded', 120],
+    ['bonus-empty', 80],
+  ]);
+});
 
 test('counts a partial payment event once on its payment month and applicant department', () => {
   const [item] = summarizeApprovedDetails([{

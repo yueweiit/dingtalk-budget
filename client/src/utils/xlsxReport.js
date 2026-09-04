@@ -594,6 +594,7 @@ const addGroupedAmount = (map, row, amount, source, reportMonth) => {
     monthlySettlementApproved: 0,
     managementApproved: 0,
     salaryApproved: 0,
+    bonusApproved: 0,
     officeApproved: 0,
     taxApproved: 0,
     itOperationApproved: 0,
@@ -629,10 +630,11 @@ const expenseDisplayKind = (item) => item?.accounting_source === 'monthly_settle
 const splitTypeLabel = (value) => {
   const type = String(value || '').trim().toLowerCase();
   if (type === 'salary') return '工资';
+  if (type === 'bonus') return '奖金';
   if (type === 'social_insurance') return '社保公积金';
   if (type === 'office_space') return '办公场地';
   if (type === 'individual_income_tax') return '个税';
-  if (type === 'it_operation') return 'IT运维费用';
+  if (type === 'it_operation') return '运营支出';
   if (type === 'manual_company_allocation') return '人工公司分摊';
   return value || '部门拆分';
 };
@@ -641,7 +643,7 @@ const extractExpenseDeptSplits = (item) => {
   const entries = [];
   const dbSplits = item?.expense_splits || item?.expenseSplits;
 
-  if (Array.isArray(dbSplits)) {
+  if (Array.isArray(dbSplits) && dbSplits.length > 0) {
     for (const entry of dbSplits) {
       const dept = String(entry.department || '').trim();
       const amt = toAmount(entry.amount);
@@ -664,6 +666,7 @@ const extractExpenseDeptSplits = (item) => {
 
   const splitColumns = [
     { col: 'salary_by_department', splitType: 'salary' },
+    { col: 'bonus_by_department', splitType: 'bonus' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
@@ -757,8 +760,10 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
 
       // 有部门拆分：直接使用 approval_expense_dept_split.amount，不再按原单总额二次分摊。
       return splits.map((entry) => ({
-        expenseKind: expenseDisplayKind(item),
-        department: entry.department,
+         expenseKind: expenseDisplayKind(item),
+         expenseType: splitTypeLabel(entry.splitType),
+         splitType: entry.splitType,
+         department: entry.department,
         departmentId: entry.departmentId,
         departmentIdentityKey: entry.departmentIdentityKey || departmentIdentityKey({
           ...entry,
@@ -856,6 +861,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
       monthlySettlementApproved: 0,
       managementApproved: 0,
       salaryApproved: 0,
+      bonusApproved: 0,
       officeApproved: 0,
       taxApproved: 0,
       itOperationApproved: 0,
@@ -869,15 +875,16 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
     current.operationApproved += toAmount(item.operationTotal);
     current.purchaseApproved += toAmount(item.purchaseTotal);
     current.monthlySettlementApproved += toAmount(item.monthlySettlementTotal);
-    current.managementApproved += toAmount(item.managementTotal);
+    current.managementApproved += toAmount(item.managementTotal) + toAmount(item.itOperationTotal);
     current.salaryApproved += toAmount(item.salaryTotal);
+    current.bonusApproved += toAmount(item.bonusTotal);
     current.officeApproved += toAmount(item.officeTotal);
     current.taxApproved += toAmount(item.taxTotal);
-    current.itOperationApproved += toAmount(item.itOperationTotal);
+    current.itOperationApproved += 0;
     current.operationCount += Number(item.operationCount || 0);
     current.purchaseCount += Number(item.purchaseCount || 0);
     if (current.budgetSubmitted) {
-      const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.officeTotal) + toAmount(item.taxTotal) + toAmount(item.itOperationTotal);
+      const classifiedApproved = toAmount(item.managementTotal) + toAmount(item.salaryTotal) + toAmount(item.bonusTotal) + toAmount(item.officeTotal) + toAmount(item.taxTotal) + toAmount(item.itOperationTotal);
       const fallbackApproved = toAmount(item.operationTotal) + toAmount(item.purchaseTotal) + toAmount(item.monthlySettlementTotal);
       current.budgetSubmittedApprovedTotal += classifiedApproved > 0
         ? classifiedApproved + toAmount(item.monthlySettlementTotal)
@@ -889,7 +896,7 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
   return [...grouped.values()]
     .map((row) => {
       const totalBudget = row.productionBudget + row.nonProductionBudget;
-      const classifiedApproved = row.managementApproved + row.salaryApproved + row.officeApproved + row.taxApproved + row.itOperationApproved;
+      const classifiedApproved = row.managementApproved + row.salaryApproved + row.bonusApproved + row.officeApproved + row.taxApproved + row.itOperationApproved;
       const totalApproved = classifiedApproved > 0
         ? classifiedApproved + row.monthlySettlementApproved
         : row.operationApproved + row.purchaseApproved + row.monthlySettlementApproved;
@@ -931,9 +938,10 @@ export const buildReportSummaryRows = ({
   ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
   ['月结付款金额', sumRows(executionRows, 'monthlySettlementApproved').toFixed(2)],
   ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
+  ['奖金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
   ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
   ['个税支出金额', sumRows(executionRows, 'taxApproved').toFixed(2)],
-  ['IT运维费用支出金额', sumRows(executionRows, 'itOperationApproved').toFixed(2)],
+  ['运营支出金额（含历史IT运维）', sumRows(executionRows, 'managementApproved').toFixed(2)],
   ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
   ['有提交预算部门支出合计', sumRows(executionRows, 'budgetSubmittedApprovedTotal').toFixed(2)],
   ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
@@ -1003,7 +1011,7 @@ export const buildExpenseShareRows = (approvedDetailRows) => {
     department: row.department || 'Unknown',
     departmentIdentityKey: departmentIdentityKey(row),
     month: row.month || 'Unspecified',
-    category: row.expenseKind || '未分类',
+     category: row.expenseType || row.expenseKind || '未分类',
     detail: expenseDetailText(row),
     amount: toAmount(row.baseCurrencyAmount || row.amount),
     formNo: row.businessId,
@@ -1078,7 +1086,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const executionSheetRows = [
-    ['序号', '所属部门', '预算归属', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '办公场地支出', '个税支出', 'IT运维费用支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
+    ['序号', '所属部门', '预算归属', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '奖金支出', '办公场地支出', '个税支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
     ...executionRows.map((row, index) => [
       index + 1,
       row.deptName,
@@ -1089,9 +1097,9 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       row.totalBudget.toFixed(2),
       row.managementApproved.toFixed(2),
       row.salaryApproved.toFixed(2),
+      row.bonusApproved.toFixed(2),
       row.officeApproved.toFixed(2),
       row.taxApproved.toFixed(2),
-      row.itOperationApproved.toFixed(2),
       row.totalApproved.toFixed(2),
       row.remainingBudget.toFixed(2),
       row.executionRate,
@@ -1113,8 +1121,8 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
     ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
     ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
+    ['奖金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
     ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
-    ['IT运维费用支出金额', sumRows(executionRows, 'itOperationApproved').toFixed(2)],
     ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
     ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
   ];
@@ -1143,7 +1151,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '记账日期', '记账来源', '付款期次', '付款金额', '付款评论', '业务动作', '备注'],
     ...approvedDetailRows.map((row, index) => [
       index + 1,
-      row.expenseKind,
+      row.expenseType || row.expenseKind,
       row.department,
       row.month,
       row.businessId,

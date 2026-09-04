@@ -466,10 +466,11 @@ function detailAmountOf(item) {
 function splitTypeLabel(value) {
   const type = String(value || '').trim().toLowerCase();
   if (type === 'salary') return '工资';
+  if (type === 'bonus') return '奖金';
   if (type === 'social_insurance') return '社保公积金';
   if (type === 'office_space') return '办公场地';
   if (type === 'individual_income_tax') return '个税';
-  if (type === 'it_operation') return 'IT运维费用';
+  if (type === 'it_operation') return '运营支出';
   if (type === 'manual_company_allocation') return '人工公司分摊';
   return value || '部门拆分';
 }
@@ -492,13 +493,14 @@ function sectionKeyForSplit(splitType) {
   if (type === 'salary' || type === 'social_insurance') return 'salary';
   if (type === 'office_space') return 'office';
   if (type === 'individual_income_tax') return 'tax';
-  if (type === 'it_operation') return 'itOperation';
+  if (type === 'bonus') return 'bonus';
+  if (type === 'it_operation') return 'operationPurchase';
   return 'operationPurchase';
 }
 
 function extractDetailSplits(item) {
   const dbSplits = item?.expense_splits || item?.expenseSplits;
-  if (Array.isArray(dbSplits)) {
+  if (Array.isArray(dbSplits) && dbSplits.length > 0) {
     return dbSplits
       .map((entry) => ({
         ...expenseDetailSplitRecord(entry),
@@ -512,6 +514,7 @@ function extractDetailSplits(item) {
 
   const splitColumns = [
     { col: 'salary_by_department', splitType: 'salary' },
+    { col: 'bonus_by_department', splitType: 'bonus' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
@@ -593,9 +596,9 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
   const sections = {
     operationPurchase: [],
     salary: [],
+    bonus: [],
     office: [],
     tax: [],
-    itOperation: [],
   };
 
   if ((!targetDepartment.deptName && !targetDepartment.dept_id) || !budgetMonth) return sections;
@@ -643,25 +646,26 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
 function expenseBreakdownFromSections(sections) {
   const operationPurchaseRows = sections?.operationPurchase || [];
   const salaryRows = sections?.salary || [];
+  const bonusRows = sections?.bonus || [];
   const officeRows = sections?.office || [];
   const taxRows = sections?.tax || [];
-  const itOperationRows = sections?.itOperation || [];
   const management = operationPurchaseRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const salary = salaryRows.reduce((sum, row) => sum + toNum(row.amount), 0);
+  const bonus = bonusRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const office = officeRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const tax = taxRows.reduce((sum, row) => sum + toNum(row.amount), 0);
-  const itOperation = itOperationRows.reduce((sum, row) => sum + toNum(row.amount), 0);
 
   return {
     operation: management,
     purchase: 0,
     management,
     salary,
+    bonus,
     office,
     tax,
-    itOperation,
-    total: management + salary + office + tax + itOperation,
-    rowCount: operationPurchaseRows.length + salaryRows.length + officeRows.length + taxRows.length + itOperationRows.length,
+    itOperation: 0,
+    total: management + salary + bonus + office + tax,
+    rowCount: operationPurchaseRows.length + salaryRows.length + bonusRows.length + officeRows.length + taxRows.length,
   };
 }
 
@@ -700,23 +704,26 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     const salary = toNum(breakdown.salary);
     const office = toNum(breakdown.office);
     const tax = toNum(breakdown.tax);
-    const itOperation = toNum(breakdown.it_operation ?? breakdown.itOperation);
-    const management = toNum(breakdown.management);
-    const total = toNum(breakdown.total) || management + salary + office + tax + itOperation;
+    const legacyItOperation = toNum(breakdown.it_operation ?? breakdown.itOperation);
+    const management = toNum(breakdown.management) + legacyItOperation;
+    const normalizedOperation = operation + legacyItOperation;
+    const bonus = toNum(breakdown.bonus);
+    const total = toNum(breakdown.total) || management + salary + bonus + office + tax;
     return {
-      operation,
+      operation: normalizedOperation,
       purchase,
       salary,
+      bonus,
       office,
       tax,
-      itOperation,
+      itOperation: 0,
       total,
-      management: management || operation + purchase,
+      management: management || normalizedOperation + purchase,
     };
   }
 
   const targetDepartment = { ...detail, deptName };
-  let operationExp = 0, purchaseExp = 0, salaryExp = 0, officeExp = 0, taxExp = 0, itOperationExp = 0;
+  let operationExp = 0, purchaseExp = 0, salaryExp = 0, bonusExp = 0, officeExp = 0, taxExp = 0, itOperationExp = 0;
 
   for (const item of rawDetails || []) {
     const itemMonth = item.query_month || '';
@@ -729,9 +736,10 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
         const amt = toNum(entry.amount);
         const splitType = String(entry.split_type || entry.splitType || '').toLowerCase();
         if (splitType === 'salary' || splitType === 'social_insurance') salaryExp += amt;
+        if (splitType === 'bonus') bonusExp += amt;
         if (splitType === 'office_space') officeExp += amt;
         if (splitType === 'individual_income_tax') taxExp += amt;
-        if (splitType === 'it_operation') itOperationExp += amt;
+        if (splitType === 'it_operation') operationExp += amt;
       }
       continue;
     }
@@ -739,10 +747,10 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     // 从 salary/office 拆分列提取该部门的份额
     const splits = [
       { col: 'salary_by_department', target: 'salary' },
+      { col: 'bonus_by_department', target: 'bonus' },
       { col: 'social_insurance_by_department', target: 'salary' },
       { col: 'office_space_by_department', target: 'office' },
       { col: 'individual_income_tax_by_department', target: 'tax' },
-      { col: 'it_operation_by_department', target: 'itOperation' },
     ];
     for (const s of splits) {
       const entries = item[s.col];
@@ -751,6 +759,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
         if (matchesExpenseDetailDepartment(targetDepartment, e)) {
           const amt = toNum(e.amount);
           if (s.target === 'salary') salaryExp += amt;
+          else if (s.target === 'bonus') bonusExp += amt;
           else if (s.target === 'office') officeExp += amt;
           else if (s.target === 'tax') taxExp += amt;
           else itOperationExp += amt;
@@ -772,10 +781,11 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     operation: operationExp,
     purchase: purchaseExp,
     salary: salaryExp,
+    bonus: bonusExp,
     office: officeExp,
     tax: taxExp,
-    itOperation: itOperationExp,
-    total: operationExp + purchaseExp + salaryExp + officeExp + taxExp + itOperationExp,
+    itOperation: 0,
+    total: operationExp + purchaseExp + salaryExp + bonusExp + officeExp + taxExp + itOperationExp,
     management: operationExp + purchaseExp,
   };
 }
@@ -1214,21 +1224,21 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                     toolbox: { feature: { saveAsImage: { title: '保存图片' } }, right: 10 },
                     grid: { top: 60, bottom: 40, left: 60, right: 20 },
                     legend: { data: ['预算', '支出'], top: 10 },
-                    xAxis: { type: 'category', data: ['管理预算明细', '人资', '办公场地', '个税', 'IT运维费用'] },
+                       xAxis: { type: 'category', data: ['管理预算明细', '人资', '奖金', '办公场地', '个税'] },
                     yAxis: { type: 'value', axisLabel: { formatter: (v) => v >= 10000 ? (v/10000)+'万' : v } },
                     series: [
-                      { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, budget.office, 0, 0], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
-                      { name: '支出', type: 'bar', color: '#52c41a', data: [exp.management, exp.salary, exp.office, exp.tax, exp.itOperation], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                       { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, 0, budget.office, 0], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                       { name: '支出', type: 'bar', color: '#52c41a', data: [exp.management, exp.salary, exp.bonus, exp.office, exp.tax], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
                     ],
                   };
 
                   const csvRows = [
                     ['类别', '预算金额', '支出金额', '对比(预算-支出)'],
                     ['管理预算明细', budget.operation.toFixed(2), exp.management.toFixed(2), (budget.operation - exp.management).toFixed(2)],
-                    ['人资', budget.hr.toFixed(2), exp.salary.toFixed(2), (budget.hr - exp.salary).toFixed(2)],
-                    ['办公场地', budget.office.toFixed(2), exp.office.toFixed(2), (budget.office - exp.office).toFixed(2)],
+                     ['人资', budget.hr.toFixed(2), exp.salary.toFixed(2), (budget.hr - exp.salary).toFixed(2)],
+                     ['奖金', '0.00', exp.bonus.toFixed(2), (-exp.bonus).toFixed(2)],
+                     ['办公场地', budget.office.toFixed(2), exp.office.toFixed(2), (budget.office - exp.office).toFixed(2)],
                     ['个税', '0.00', exp.tax.toFixed(2), (-exp.tax).toFixed(2)],
-                    ['IT运维费用', '0.00', exp.itOperation.toFixed(2), (-exp.itOperation).toFixed(2)],
                   ];
 
                   return (
@@ -1267,7 +1277,7 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#2f54eb' }}>{fmtWan(budget.office)}</div>
                         </div>
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 16 }}>
+                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 16 }}>
                         <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
                           <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>管理支出</div>
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.management)}</div>
@@ -1277,16 +1287,16 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.salary)}</div>
                         </div>
                         <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>奖金支出</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.bonus)}</div>
+                        </div>
+                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
                           <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>办公场地支出</div>
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.office)}</div>
                         </div>
                         <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
                           <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>个税支出</div>
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.tax)}</div>
-                        </div>
-                        <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
-                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>IT运维费用支出</div>
-                          <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.itOperation)}</div>
                         </div>
                       </div>
 

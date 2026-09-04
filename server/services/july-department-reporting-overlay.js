@@ -6,6 +6,11 @@ const JULY_REPORTING_DEPARTMENTS = new Map([
   ['1089481630', { departmentId: '1059483024', departmentName: 'OBG 线上业务组Grupo de negocios en línea' }],
 ]);
 
+const SINGLE_RECORD_REPORTING_OVERRIDES = new Map([
+  ['202608281007000322547', { departmentId: '1089765983', departmentName: 'HR人力资源中心' }],
+  ['202608280953000047922', { departmentId: '1089533879', departmentName: '产品&开发' }],
+]);
+
 function compact(value) {
   return String(value || '').trim();
 }
@@ -29,12 +34,23 @@ export function resolveJulyDepartmentReporting({ departmentId, month } = {}) {
 }
 
 export function applyJulyDepartmentReportingOverlay(record = {}, month = record.budget_month || record.declaration_month || record.query_month) {
+  const sourceRecordId = compact(record.business_id || record.businessId || record.form_no || record.formNo);
   const sourceDepartmentId = compact(
     record.dept_id || record.department_id || record.applicant_department_id || record.creator_department_id
   );
   const sourceDepartmentName = compact(
     record.dept_name || record.department || record.applicant_department || record.creator_department
   );
+  const singleRecordReporting = SINGLE_RECORD_REPORTING_OVERRIDES.get(sourceRecordId);
+  if (singleRecordReporting) {
+    return {
+      ...record,
+      reporting_dept_id: singleRecordReporting.departmentId,
+      reporting_dept_name: singleRecordReporting.departmentName,
+      reporting_department_identity_key: `id:${singleRecordReporting.departmentId}`,
+      reporting_department_mapped: true,
+    };
+  }
   const reporting = resolveJulyDepartmentReporting({ departmentId: sourceDepartmentId, month });
 
   return {

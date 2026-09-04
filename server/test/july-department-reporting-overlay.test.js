@@ -14,6 +14,22 @@ import {
   shouldIncludeDepartmentExpense,
 } from '../routes/list.js';
 
+test('projects the two historical records to their exact departments', () => {
+  const hr = applyJulyDepartmentReportingOverlay({
+    business_id: '202608281007000322547',
+    applicant_department_id: 'old-department',
+  }, '2026-08');
+  const product = applyJulyDepartmentReportingOverlay({
+    business_id: '202608280953000047922',
+    applicant_department_id: 'old-department',
+  }, '2026-08');
+
+  assert.equal(hr.reporting_dept_id, '1089765983');
+  assert.equal(hr.reporting_dept_name, 'HR人力资源中心');
+  assert.equal(product.reporting_dept_id, '1089533879');
+  assert.equal(product.reporting_dept_name, '产品&开发');
+});
+
 test('maps the confirmed July new departments to their old reporting departments', () => {
   const cases = [
     ['1089928990', 'FC CN财务中心 Centro de finanzas', '1079492125'],

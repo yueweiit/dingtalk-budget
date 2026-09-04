@@ -23,7 +23,7 @@ test('summarizes individual income tax independently from management expenses', 
   assert.equal(item.officeTotal, 0);
 });
 
-test('summarizes IT operation independently and includes it in the operation total', () => {
+test('folds historical IT operation splits into ordinary operation expense', () => {
   const [item] = summarizeApprovedDetails([{
     expense_kind: 'operation',
     query_month: '2026-08',
@@ -37,9 +37,9 @@ test('summarizes IT operation independently and includes it in the operation tot
     }],
   }]);
 
-  assert.equal(item.itOperationTotal, 876.5);
+  assert.equal(item.itOperationTotal, 0);
   assert.equal(item.operationTotal, 876.5);
-  assert.equal(item.managementTotal, 0);
+  assert.equal(item.managementTotal, 876.5);
   assert.equal(item.salaryTotal, 0);
   assert.equal(item.officeTotal, 0);
   assert.equal(item.taxTotal, 0);

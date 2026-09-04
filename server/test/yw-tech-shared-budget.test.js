@@ -571,6 +571,7 @@ test('rolls July YW Tech child expense summaries into the parent department', ()
     monthlySettlementCount: 0,
     managementTotal: 10,
     salaryTotal: 20,
+    bonusTotal: 0,
     officeTotal: 30,
     taxTotal: 0,
     itOperationTotal: 0,
