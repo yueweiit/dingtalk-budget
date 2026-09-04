@@ -44,6 +44,13 @@ test('labels a single payment event as actual payment', () => {
   assert.equal(paymentEventLabel(singleEvent, 1, 1), '实际付款');
 });
 
+test('labels a fully deducted event distinctly', () => {
+  assert.equal(paymentEventLabel({
+    accounting_source: 'payment_event',
+    payment_event_evidence_text: '已全额抵扣',
+  }, 1, 1), '已全额抵扣');
+});
+
 test('exports payment date, installment, amount, and comment evidence', () => {
   const [row] = buildApprovedDetailRows([{
     accounting_source: 'payment_event',

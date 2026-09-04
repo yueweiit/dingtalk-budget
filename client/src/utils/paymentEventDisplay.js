@@ -33,6 +33,10 @@ export function buildPaymentSequenceMap(rawDetails = []) {
   return sequenceMap;
 }
 
+function isFullyDeducted(item) {
+  return String(item?.payment_event_evidence_text || '').includes('\u5df2\u5168\u989d\u62b5\u6263');
+}
+
 export function buildPaymentCountMap(rawDetails = []) {
   const eventKeysByBusiness = new Map();
   for (const item of rawDetails) {
@@ -48,6 +52,7 @@ export function buildPaymentCountMap(rawDetails = []) {
 
 export function paymentEventLabel(item, sequence = 0, total = 0) {
   if (item?.accounting_source === 'payment_event') {
+    if (isFullyDeducted(item)) return '\u5df2\u5168\u989d\u62b5\u6263';
     if (total <= 1) return '\u5b9e\u9645\u4ed8\u6b3e';
     return `${sequence > 0 ? `\u7b2c${sequence}\u671f` : '\u5b9e\u9645'}\u4ed8\u6b3e`;
   }
