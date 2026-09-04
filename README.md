@@ -30,7 +30,9 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - DingTalk bot query endpoint (`/api/dingtalk/querySimple`)
 - Pending approval auto-retry with backfill mechanism
 - Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
-- IT operation expense details are split by department like salary details, stored separately as `it_operation`, and included in actual expense totals without being merged into management or salary expense
+- Bonus details from the designated Lingxiang-Xingming operation form are split by department only when the same management-expense selection component changes from salary to `奖金/Bonificaciones` and the approval is completed and approved, then shown as a separate bonus category; the amount is included once in actual expense totals and is not merged into ordinary management expense
+- Historical IT operation split rows remain readable for compatibility with old data; new IT operation selections are handled as ordinary forms by the sync service
+- Historical reporting overrides are applied by exact business number: `202608281007000322547` maps to department `1089765983`, and `202608280953000047922` maps to department `1089533879`; raw database department fields are not changed
 - API Key authentication, rate limiting, circuit breaker
 - User login with superadmin and department-supervisor roles
 - Backend-enforced department scope: supervisors see their department and descendants; superadmins see all data
@@ -181,7 +183,7 @@ Open http://localhost:5173 in your browser.
 | Method | Path                            | Description              |
 | ------ | ------------------------------- | ------------------------ |
 | POST   | `/api/sync`                     | Manually sync DingTalk budget data, refresh existing statuses, and optionally trigger expense sync |
-| POST   | `/api/sync/expense-splits`      | Sync operation expense split data (salary, social insurance, office space) through the expense service |
+| POST   | `/api/sync/expense-splits`      | Sync operation expense split data (salary, bonus, social insurance, office space) through the expense service |
 | GET    | `/api/list/production`          | Production budget list   |
 | GET    | `/api/list/non-production`      | Non-production budget list |
 | GET    | `/api/list/stats`               | Dashboard statistics     |
@@ -232,7 +234,7 @@ Private project.
 
 Actual expense reporting first reads `approval_expense_payment_events`, which stores confirmed payment facts from authorized approval comments or explicitly reviewed manual confirmations. Automatic events require an authorized source user with `comment_explicit_amount` and `authorized-comment-v1`; reviewed manual events require `manual_confirmed` and `manual-confirmed-v1`. The accounting month is the UTC month of `paid_at`. Multiple events for one approval are ordered by payment time and displayed as installment labels such as `第 1 期付款` and `第 2 期付款`; the detail page and export keep the payment date, amount, and evidence text.
 
-When no eligible payment event exists, a non-split expense falls back to the completed-and-agreed approval amount and completion time. Salary, social insurance, housing fund, office space, and individual income tax forms continue to use department split rows and do not use whole-form payment events, preventing double counting.
+When no eligible payment event exists, a non-split expense falls back to the completed-and-agreed approval amount and completion time. Salary, bonus, social insurance, housing fund, office space, and individual income tax forms continue to use department split rows and do not use whole-form payment events, preventing double counting. Bonus rows are only produced when the configured process selects `奖金/Bonificaciones` in the management-expense component and has a non-empty bonus detail table.
 
 The report also contains one explicit historical correction for business number `202607211109000332593`: its raw department remains `FC CN财务中心` (FC CN Finance Center), while the reporting projection places only this record under `FC财务中心` (FC Finance Center). This correction is applied by exact business number in the report/detail/export projection and does not change database data or other records.
 

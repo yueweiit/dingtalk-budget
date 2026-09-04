@@ -11,6 +11,8 @@ const JULY_REPORTING_DEPARTMENTS = new Map([
 // exact business number.
 const SINGLE_RECORD_REPORTING_OVERRIDES = new Map([
   ['202607211109000332593', { departmentId: '1089928990', departmentName: 'FC财务中心' }],
+  ['202608281007000322547', { departmentId: '1089765983', departmentName: 'HR人力资源中心' }],
+  ['202608280953000047922', { departmentId: '1089533879', departmentName: '产品&开发' }],
 ]);
 
 function compact(value) {

@@ -56,6 +56,7 @@ const expenseFields = [
   'purchase_expense',
   'monthly_settlement_expense',
   'salary_expense',
+  'bonus_expense',
   'office_expense',
   'tax_expense',
   'it_operation_expense',
@@ -69,6 +70,7 @@ const approvedSummaryFields = [
   'monthlySettlementTotal',
   'managementTotal',
   'salaryTotal',
+  'bonusTotal',
   'officeTotal',
   'taxTotal',
   'itOperationTotal',
@@ -197,10 +199,11 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
     const purchaseExpense = rounded(totals.purchase_expense);
     const monthlySettlementExpense = rounded(totals.monthly_settlement_expense);
     const salaryExpense = rounded(totals.salary_expense);
+    const bonusExpense = rounded(totals.bonus_expense);
     const officeExpense = rounded(totals.office_expense);
     const taxExpense = rounded(totals.tax_expense);
     const itOperationExpense = rounded(totals.it_operation_expense);
-    const approvedAmount = rounded(managementExpense + salaryExpense + officeExpense + taxExpense + itOperationExpense + monthlySettlementExpense);
+    const approvedAmount = rounded(managementExpense + salaryExpense + bonusExpense + officeExpense + taxExpense + itOperationExpense + monthlySettlementExpense);
 
     rolledUp.push({
       ...group.parent,
@@ -213,6 +216,7 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
       purchase_expense: purchaseExpense,
       monthly_settlement_expense: monthlySettlementExpense,
       salary_expense: salaryExpense,
+      bonus_expense: bonusExpense,
       office_expense: officeExpense,
       tax_expense: taxExpense,
       it_operation_expense: itOperationExpense,
@@ -225,6 +229,7 @@ export function rollupSharedBudgetRows(records = [], configs = SHARED_BUDGET_CON
         purchase: purchaseExpense,
         monthly_settlement: monthlySettlementExpense,
         salary: salaryExpense,
+        bonus: bonusExpense,
         office: officeExpense,
         tax: taxExpense,
         it_operation: itOperationExpense,

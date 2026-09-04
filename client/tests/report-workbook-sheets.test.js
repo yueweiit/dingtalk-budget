@@ -37,9 +37,10 @@ test('导出报表只保留当前工作表并移除标记页签', async () => {
   }
 });
 
-test('执行报表包含 IT 运维费用独立列', async () => {
+test('执行报表包含奖金列且不包含 IT 运维独立列', async () => {
   const workbook = await workbookXmlText();
-  assert.ok(workbook.includes('IT运维费用支出'));
+  assert.ok(workbook.includes('奖金支出'));
+  assert.equal(workbook.includes('IT运维费用支出'), false);
 });
 
 test('导出执行状态使用审批中预算，实际支出明细使用统一明细且不含汇总部门', async () => {
