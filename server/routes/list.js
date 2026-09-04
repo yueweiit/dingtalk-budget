@@ -1140,8 +1140,22 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
     const month = item.query_month || approvedDetailMonth(item);
     if (!month) continue;
 
+    const isFullyDeducted = item.accounting_source === 'payment_event'
+      && String(item.payment_event_evidence_text || '').includes('已全额抵扣');
     const amount = numberValue(firstNonEmpty(item.base_currency_amount, item.amount, item.detail_summary_amount));
-    if (amount <= 0) continue;
+    if (amount <= 0) {
+      if (isFullyDeducted) {
+        const departmentRecord = expenseDepartmentRecord(item);
+        if (shouldIncludeDepartmentExpense(departmentRecord, month, item.execution_region, budgetedDepartmentMonths)) {
+          addApprovedExpenseGroup(grouped, departmentRecord, month, {
+            operationTotal: 0,
+            managementTotal: 0,
+            operationCount: 1,
+          });
+        }
+      }
+      continue;
+    }
 
     const directDepartmentRecord = expenseDepartmentRecord(item);
     const splits = splitRowsOf(item);
@@ -1305,7 +1319,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       WHERE event.business_id = ${alias}.business_id
         AND event.status = 'confirmed'
         AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
+      AND event.source_type IN ('comment_explicit_amount', 'fully_deducted')
         AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
     )` : ''}`;
 
@@ -1476,7 +1490,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       ${paymentDateWhereFor('event')}
         AND event.status = 'confirmed'
         AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
+        AND event.source_type IN ('comment_explicit_amount', 'fully_deducted')
         AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
          AND NOT EXISTS (
           SELECT 1
@@ -1530,7 +1544,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       ${paymentDateWhereFor('event')}
         AND event.status = 'confirmed'
          AND event.rule_version = 'authorized-comment-v1'
-         AND event.source_type = 'comment_explicit_amount'
+         AND event.source_type IN ('comment_explicit_amount', 'fully_deducted')
          AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
       ` : ''}
       UNION ALL
@@ -1626,7 +1640,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         AND event.expense_kind = 'monthly_settlement'
         AND event.status = 'confirmed'
         AND event.rule_version = 'authorized-comment-v1'
-        AND event.source_type = 'comment_explicit_amount'
+        AND event.source_type IN ('comment_explicit_amount', 'fully_deducted')
         AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}` : ''}
     `, params);
     return result.rows;
@@ -1950,7 +1964,7 @@ async function fetchPendingBudgetRows(client, budgetType, filters = {}) {
          WHERE (flow.form_no = ${alias}.form_no
                 OR (flow.process_instance_id IS NOT NULL
                     AND flow.process_instance_id = ${alias}.process_instance_id))
-           AND COALESCE(flow.approve_opinion, '') ~* '已支付|部分支付'
+           AND COALESCE(flow.approve_opinion, '') ~* '已支付|部分支付|已全额抵扣'
            AND ${AUTHORIZED_PAYMENT_APPROVER_USER_SQL}
        ) AS payment_confirmation_exists`
     : 'FALSE AS payment_confirmation_exists';
@@ -1986,7 +2000,7 @@ function pendingExpensePaymentCommentSql(alias, hasPaymentEventTable) {
       CASE WHEN jsonb_typeof(${rawRecords}) = 'array' THEN ${rawRecords} ELSE '[]'::jsonb END
     ) AS record
     WHERE COALESCE(record->>'userId', record->>'staffId', record->>'userid', '') IN (${AUTHORIZED_PAYMENT_USER_IDS_SQL})
-      AND COALESCE(record->>'remark', record->>'comment', '') ~* '已支付|部分支付'
+      AND COALESCE(record->>'remark', record->>'comment', '') ~* '已支付|部分支付|已全额抵扣'
   )`;
   const paymentEventExists = hasPaymentEventTable
     ? `EXISTS (
@@ -1995,7 +2009,7 @@ function pendingExpensePaymentCommentSql(alias, hasPaymentEventTable) {
          WHERE event.business_id = ${alias}.business_id
            AND event.status = 'confirmed'
            AND event.rule_version = 'authorized-comment-v1'
-           AND event.source_type = 'comment_explicit_amount'
+           AND event.source_type IN ('comment_explicit_amount', 'fully_deducted')
            AND ${AUTHORIZED_PAYMENT_EVENT_USER_SQL}
        )`
     : 'FALSE';

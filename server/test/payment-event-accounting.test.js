@@ -23,6 +23,24 @@ test('counts a partial payment event once on its payment month and applicant dep
   assert.equal(item.managementTotal, 14500);
 });
 
+test('keeps a fully deducted event as a zero-amount processed fact', () => {
+  const [item] = summarizeApprovedDetails([{
+    expense_kind: 'operation',
+    accounting_source: 'payment_event',
+    accounting_at: '2026-08-05T10:00:00.000Z',
+    payment_event_amount: 0,
+    payment_event_evidence_text: '已全额抵扣',
+    base_currency_amount: 0,
+    applicant_department: '采购部',
+    applicant_department_id: 'dept-purchase',
+    expense_splits: [],
+  }]);
+
+  assert.equal(item.month, '2026-08');
+  assert.equal(item.operationTotal, 0);
+  assert.equal(item.managementTotal, 0);
+});
+
 test('payment-event query includes final-approval fallbacks without bypassing department splits', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const source = fs.readFileSync(path.join(here, '..', 'routes', 'list.js'), 'utf8');
@@ -35,6 +53,7 @@ test('payment-event query includes final-approval fallbacks without bypassing de
   assert.match(source, /JOIN approval_expense_operation o ON o\.business_id = event\.business_id/);
   assert.match(source, /FROM approval_expense_dept_split event_split/);
   assert.match(source, /event\.paid_at AS accounting_at/);
+  assert.match(source, /event\.source_type IN \('comment_explicit_amount', 'fully_deducted'\)/);
   assert.match(source, /completedApprovalResultSql\('p'\)\} AS result/);
 });
 

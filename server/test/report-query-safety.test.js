@@ -18,7 +18,7 @@ test('report export does not run concurrent queries on one PostgreSQL Client', (
 test('pending budget payment-comment exclusion is limited to authorized users', () => {
   assert.match(source, /const AUTHORIZED_PAYMENT_APPROVER_USER_SQL/);
   assert.match(source, /flow\.approver_userid IN/);
-  assert.match(source, /COALESCE\(flow\.approve_opinion, ''\) ~\* '已支付\|部分支付'/);
+  assert.match(source, /COALESCE\(flow\.approve_opinion, ''\) ~\* '已支付\|部分支付\|已全额抵扣'/);
 });
 
 test('visual report receives ordinary pending expenses separately from budget pending rows', () => {
