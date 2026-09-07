@@ -494,6 +494,7 @@ function sectionKeyForSplit(splitType) {
   if (type === 'office_space') return 'office';
   if (type === 'individual_income_tax') return 'tax';
   if (type === 'bonus') return 'bonus';
+  if (type === 'office_equipment') return 'office_equipment';
   if (type === 'it_operation') return 'operationPurchase';
   return 'operationPurchase';
 }
@@ -515,6 +516,7 @@ function extractDetailSplits(item) {
   const splitColumns = [
     { col: 'salary_by_department', splitType: 'salary' },
     { col: 'bonus_by_department', splitType: 'bonus' },
+    { col: 'office_equipment_by_department', splitType: 'office_equipment' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
@@ -597,6 +599,7 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
     operationPurchase: [],
     salary: [],
     bonus: [],
+    office_equipment: [],
     office: [],
     tax: [],
   };
@@ -647,11 +650,13 @@ function expenseBreakdownFromSections(sections) {
   const operationPurchaseRows = sections?.operationPurchase || [];
   const salaryRows = sections?.salary || [];
   const bonusRows = sections?.bonus || [];
+  const officeEquipmentRows = sections?.office_equipment || [];
   const officeRows = sections?.office || [];
   const taxRows = sections?.tax || [];
   const management = operationPurchaseRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const salary = salaryRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const bonus = bonusRows.reduce((sum, row) => sum + toNum(row.amount), 0);
+  const officeEquipment = officeEquipmentRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const office = officeRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const tax = taxRows.reduce((sum, row) => sum + toNum(row.amount), 0);
 
@@ -661,11 +666,12 @@ function expenseBreakdownFromSections(sections) {
     management,
     salary,
     bonus,
+    officeEquipment,
     office,
     tax,
     itOperation: 0,
-    total: management + salary + bonus + office + tax,
-    rowCount: operationPurchaseRows.length + salaryRows.length + bonusRows.length + officeRows.length + taxRows.length,
+    total: management + salary + bonus + officeEquipment + office + tax,
+    rowCount: operationPurchaseRows.length + salaryRows.length + bonusRows.length + officeEquipmentRows.length + officeRows.length + taxRows.length,
   };
 }
 
@@ -708,12 +714,14 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     const management = toNum(breakdown.management) + legacyItOperation;
     const normalizedOperation = operation + legacyItOperation;
     const bonus = toNum(breakdown.bonus);
-    const total = toNum(breakdown.total) || management + salary + bonus + office + tax;
+    const officeEquipment = toNum(breakdown.office_equipment ?? breakdown.officeEquipment);
+    const total = toNum(breakdown.total) || management + salary + bonus + officeEquipment + office + tax;
     return {
       operation: normalizedOperation,
       purchase,
       salary,
       bonus,
+      officeEquipment,
       office,
       tax,
       itOperation: 0,
@@ -723,7 +731,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
   }
 
   const targetDepartment = { ...detail, deptName };
-  let operationExp = 0, purchaseExp = 0, salaryExp = 0, bonusExp = 0, officeExp = 0, taxExp = 0, itOperationExp = 0;
+  let operationExp = 0, purchaseExp = 0, salaryExp = 0, bonusExp = 0, officeEquipmentExp = 0, officeExp = 0, taxExp = 0, itOperationExp = 0;
 
   for (const item of rawDetails || []) {
     const itemMonth = item.query_month || '';
@@ -737,6 +745,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
         const splitType = String(entry.split_type || entry.splitType || '').toLowerCase();
         if (splitType === 'salary' || splitType === 'social_insurance') salaryExp += amt;
         if (splitType === 'bonus') bonusExp += amt;
+        if (splitType === 'office_equipment') officeEquipmentExp += amt;
         if (splitType === 'office_space') officeExp += amt;
         if (splitType === 'individual_income_tax') taxExp += amt;
         if (splitType === 'it_operation') operationExp += amt;
@@ -748,6 +757,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     const splits = [
       { col: 'salary_by_department', target: 'salary' },
       { col: 'bonus_by_department', target: 'bonus' },
+      { col: 'office_equipment_by_department', target: 'office_equipment' },
       { col: 'social_insurance_by_department', target: 'salary' },
       { col: 'office_space_by_department', target: 'office' },
       { col: 'individual_income_tax_by_department', target: 'tax' },
@@ -760,6 +770,7 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
           const amt = toNum(e.amount);
           if (s.target === 'salary') salaryExp += amt;
           else if (s.target === 'bonus') bonusExp += amt;
+          else if (s.target === 'office_equipment') officeEquipmentExp += amt;
           else if (s.target === 'office') officeExp += amt;
           else if (s.target === 'tax') taxExp += amt;
           else itOperationExp += amt;
@@ -782,10 +793,11 @@ function computeExpenseBreakdown(rawDetails, deptName, budgetMonth, detail) {
     purchase: purchaseExp,
     salary: salaryExp,
     bonus: bonusExp,
+    officeEquipment: officeEquipmentExp,
     office: officeExp,
     tax: taxExp,
     itOperation: 0,
-    total: operationExp + purchaseExp + salaryExp + bonusExp + officeExp + taxExp + itOperationExp,
+    total: operationExp + purchaseExp + salaryExp + bonusExp + officeEquipmentExp + officeExp + taxExp + itOperationExp,
     management: operationExp + purchaseExp,
   };
 }
@@ -1224,11 +1236,11 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                     toolbox: { feature: { saveAsImage: { title: '保存图片' } }, right: 10 },
                     grid: { top: 60, bottom: 40, left: 60, right: 20 },
                     legend: { data: ['预算', '支出'], top: 10 },
-                       xAxis: { type: 'category', data: ['管理预算明细', '人资', '备用金', '办公场地', '个税'] },
+                       xAxis: { type: 'category', data: ['管理预算明细', '人资', '备用金', '办公设备', '办公场地', '个税'] },
                     yAxis: { type: 'value', axisLabel: { formatter: (v) => v >= 10000 ? (v/10000)+'万' : v } },
                     series: [
-                       { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, 0, budget.office, 0], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
-                       { name: '支出', type: 'bar', color: '#52c41a', data: [exp.management, exp.salary, exp.bonus, exp.office, exp.tax], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                       { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, 0, 0, budget.office, 0], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
+                       { name: '支出', type: 'bar', color: '#52c41a', data: [exp.management, exp.salary, exp.bonus, exp.officeEquipment, exp.office, exp.tax], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
                     ],
                   };
 
@@ -1237,6 +1249,7 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                     ['管理预算明细', budget.operation.toFixed(2), exp.management.toFixed(2), (budget.operation - exp.management).toFixed(2)],
                      ['人资', budget.hr.toFixed(2), exp.salary.toFixed(2), (budget.hr - exp.salary).toFixed(2)],
                      ['备用金', '0.00', exp.bonus.toFixed(2), (-exp.bonus).toFixed(2)],
+                     ['办公设备', '0.00', exp.officeEquipment.toFixed(2), (-exp.officeEquipment).toFixed(2)],
                      ['办公场地', budget.office.toFixed(2), exp.office.toFixed(2), (budget.office - exp.office).toFixed(2)],
                     ['个税', '0.00', exp.tax.toFixed(2), (-exp.tax).toFixed(2)],
                   ];

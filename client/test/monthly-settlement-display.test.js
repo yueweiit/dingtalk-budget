@@ -10,6 +10,48 @@ test('备用金拆分数据进入备用金明细栏目', () => {
   assert.deepEqual(section, { key: 'bonus', title: '备用金明细' });
 });
 
+test('办公设备拆分数据进入独立的办公设备明细栏目且只计入一次', () => {
+  const section = expenseDetailSectionDefinitions.find((item) => item.key === 'office_equipment');
+  assert.deepEqual(section, { key: 'office_equipment', title: '办公设备明细' });
+
+  const [detail] = buildApprovedDetailRows([{
+    expense_kind: 'operation',
+    accounting_source: 'completed_department_split',
+    accounting_at: '2026-09-01T00:00:00.000Z',
+    business_id: 'office-equipment-test',
+    applicant_department: '测试部门',
+    applicant_department_id: 'dept-test',
+    expense_splits: [{
+      department: '测试部门',
+      department_id: 'dept-test',
+      split_type: 'office_equipment',
+      amount: 456.78,
+      note: '办公设备拆分',
+    }],
+  }]);
+  assert.equal(detail.expenseType, '办公设备');
+  assert.equal(detail.amount, 456.78);
+
+  const [summary] = buildExecutionRows({
+    productionRows: [],
+    operationRows: [],
+    approvedExpenses: [{
+      department: '测试部门',
+      department_id: 'dept-test',
+      month: '2026-09',
+      operationTotal: 456.78,
+      officeEquipmentTotal: 456.78,
+      managementTotal: 0,
+      salaryTotal: 0,
+    }],
+    reportMonth: '2026-09',
+  });
+  assert.equal(summary.officeEquipmentApproved, 456.78);
+  assert.equal(summary.salaryApproved, 0);
+  assert.equal(summary.managementApproved, 0);
+  assert.equal(summary.totalApproved, 456.78);
+});
+
 test('exports a completed monthly settlement detail with its explicit payment label and amount', () => {
   const [row] = buildApprovedDetailRows([{
     expense_kind: 'purchase',

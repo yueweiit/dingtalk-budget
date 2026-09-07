@@ -439,6 +439,7 @@ function splitExpenseCategory(splitType) {
   if (type === 'purchase') return 'purchase';
   if (type === 'salary' || type === 'social_insurance') return 'salary';
   if (type === 'bonus') return 'bonus';
+  if (type === 'office_equipment') return 'office_equipment';
   if (type === 'office' || type === 'office_space') return 'office';
   if (type === 'individual_income_tax' || type === 'tax') return 'tax';
   // IT 运维明细已停用；历史拆分记录仍保留，但按普通运营支出展示。
@@ -448,6 +449,10 @@ function splitExpenseCategory(splitType) {
 
 export function bonusByDepartmentSelectSql(hasColumn) {
   return hasColumn ? 'o.bonus_by_department' : 'NULL::jsonb';
+}
+
+export function officeEquipmentByDepartmentSelectSql(hasColumn) {
+  return hasColumn ? 'o.office_equipment_by_department' : 'NULL::jsonb';
 }
 
 function expenseCountValues(item, businessId, department, month, countedExpenseDepartments) {
@@ -514,6 +519,7 @@ function addExpenseBreakdown(map, department, month, values = {}) {
     office: 0,
     tax: 0,
     bonus: 0,
+    officeEquipment: 0,
     itOperation: 0,
     management: 0,
     operation_count: 0,
@@ -528,6 +534,7 @@ function addExpenseBreakdown(map, department, month, values = {}) {
   current.office += numberValue(values.office);
   current.tax += numberValue(values.tax);
   current.bonus += numberValue(values.bonus);
+  current.officeEquipment += numberValue(values.officeEquipment);
   current.itOperation += numberValue(values.itOperation);
   current.management += numberValue(values.management);
   current.operation_count += numberValue(values.operation_count);
@@ -661,6 +668,7 @@ function buildAllocatedExpenseItems(rows) {
       officeTotal: 0,
       taxTotal: 0,
       bonusTotal: 0,
+      officeEquipmentTotal: 0,
       itOperationTotal: 0,
     };
 
@@ -676,11 +684,12 @@ function buildAllocatedExpenseItems(rows) {
     current.officeTotal += officeExpense;
     current.taxTotal += taxExpense;
     current.bonusTotal += numberValue(row.bonus_expense);
+    current.officeEquipmentTotal += numberValue(row.office_equipment_expense);
     current.itOperationTotal += 0;
-    current.operationTotal += operationExpense + salaryExpense + officeExpense + taxExpense + numberValue(row.bonus_expense) + itOperationExpense;
+    current.operationTotal += operationExpense + salaryExpense + officeExpense + taxExpense + numberValue(row.bonus_expense) + numberValue(row.office_equipment_expense) + itOperationExpense;
     current.purchaseTotal += purchaseExpense;
     current.monthlySettlementTotal += monthlySettlementExpense;
-    current.operationCount += operationExpense + salaryExpense + officeExpense + taxExpense + numberValue(row.bonus_expense) + itOperationExpense > 0 ? 1 : 0;
+    current.operationCount += operationExpense + salaryExpense + officeExpense + taxExpense + numberValue(row.bonus_expense) + numberValue(row.office_equipment_expense) + itOperationExpense > 0 ? 1 : 0;
     current.purchaseCount += purchaseExpense > 0 ? 1 : 0;
     current.monthlySettlementCount += monthlySettlementExpense > 0 ? 1 : 0;
     grouped.set(key, current);
@@ -696,6 +705,7 @@ function buildAllocatedExpenseItems(rows) {
     officeTotal: Number(item.officeTotal.toFixed(2)),
     taxTotal: Number(item.taxTotal.toFixed(2)),
     bonusTotal: Number(item.bonusTotal.toFixed(2)),
+    officeEquipmentTotal: Number(item.officeEquipmentTotal.toFixed(2)),
     itOperationTotal: Number(item.itOperationTotal.toFixed(2)),
   }));
 }
@@ -799,8 +809,9 @@ async function attachExpenseAmounts(records, {
       purchase: 0,
       monthlySettlement: 0,
       salary: 0,
-      bonus: 0,
-      office: 0,
+    bonus: 0,
+    officeEquipment: 0,
+    office: 0,
       tax: 0,
       itOperation: 0,
       management: 0,
@@ -815,10 +826,11 @@ async function attachExpenseAmounts(records, {
     const monthlySettlementRounded = Number(direct.monthlySettlement.toFixed(2));
     const salaryRounded = Number(direct.salary.toFixed(2));
     const bonusRounded = Number(direct.bonus.toFixed(2));
+    const officeEquipmentRounded = Number(direct.officeEquipment.toFixed(2));
     const officeRounded = Number(direct.office.toFixed(2));
     const taxRounded = Number(direct.tax.toFixed(2));
     const itOperationRounded = Number(direct.itOperation.toFixed(2));
-    const totalRounded = Number((managementRounded + salaryRounded + bonusRounded + officeRounded + taxRounded + itOperationRounded + monthlySettlementRounded).toFixed(2));
+    const totalRounded = Number((managementRounded + salaryRounded + bonusRounded + officeEquipmentRounded + officeRounded + taxRounded + itOperationRounded + monthlySettlementRounded).toFixed(2));
 
     return {
       ...row,
@@ -828,6 +840,7 @@ async function attachExpenseAmounts(records, {
       monthly_settlement_expense: monthlySettlementRounded,
       salary_expense: salaryRounded,
       bonus_expense: bonusRounded,
+      office_equipment_expense: officeEquipmentRounded,
       office_expense: officeRounded,
       tax_expense: taxRounded,
       it_operation_expense: itOperationRounded,
@@ -842,6 +855,7 @@ async function attachExpenseAmounts(records, {
         monthly_settlement: monthlySettlementRounded,
         salary: salaryRounded,
         bonus: bonusRounded,
+        office_equipment: officeEquipmentRounded,
         office: officeRounded,
         tax: taxRounded,
         it_operation: itOperationRounded,
@@ -874,6 +888,7 @@ function extractDeptSplitEntries(item) {
   const splitColumns = [
     { col: 'salary_by_department', splitType: 'salary' },
     { col: 'bonus_by_department', splitType: 'bonus' },
+    { col: 'office_equipment_by_department', splitType: 'office_equipment' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
@@ -934,6 +949,7 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
     managementTotal: 0,
     salaryTotal: 0,
     bonusTotal: 0,
+    officeEquipmentTotal: 0,
     officeTotal: 0,
     taxTotal: 0,
     itOperationTotal: 0,
@@ -946,6 +962,7 @@ function addApprovedExpenseGroup(grouped, departmentRecord, month, values = {}) 
   current.managementTotal += numberValue(values.managementTotal);
   current.salaryTotal += numberValue(values.salaryTotal);
   current.bonusTotal += numberValue(values.bonusTotal);
+  current.officeEquipmentTotal += numberValue(values.officeEquipmentTotal);
   current.officeTotal += numberValue(values.officeTotal);
   current.taxTotal += numberValue(values.taxTotal);
   current.itOperationTotal += numberValue(values.itOperationTotal);
@@ -996,6 +1013,7 @@ function redactScopedExpenseMetadata(item) {
     ...item,
     salary_by_department: null,
     bonus_by_department: null,
+    office_equipment_by_department: null,
     social_insurance_by_department: null,
     office_space_by_department: null,
     individual_income_tax_by_department: null,
@@ -1177,6 +1195,7 @@ function roundApprovedExpenseItems(items) {
     managementTotal: Number(numberValue(item.managementTotal).toFixed(2)),
     salaryTotal: Number(numberValue(item.salaryTotal).toFixed(2)),
     bonusTotal: Number(numberValue(item.bonusTotal).toFixed(2)),
+    officeEquipmentTotal: Number(numberValue(item.officeEquipmentTotal).toFixed(2)),
     officeTotal: Number(numberValue(item.officeTotal).toFixed(2)),
     taxTotal: Number(numberValue(item.taxTotal).toFixed(2)),
     itOperationTotal: Number(numberValue(item.itOperationTotal).toFixed(2)),
@@ -1255,6 +1274,7 @@ function summarizeApprovedDetails(details, budgetedDepartmentMonths = new Set())
         values.operationTotal = entry.amount;
         if (category === 'salary') values.salaryTotal = entry.amount;
         else if (category === 'bonus') values.bonusTotal = entry.amount;
+        else if (category === 'office_equipment') values.officeEquipmentTotal = entry.amount;
         else if (category === 'office') values.officeTotal = entry.amount;
         else if (category === 'tax') values.taxTotal = entry.amount;
         else if (category === 'it_operation') values.managementTotal = entry.amount;
@@ -1325,6 +1345,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
   let hasMonthlySettlementDetailsTable = false;
   let hasPurchaseProcessorsTable = false;
   let hasBonusByDepartmentColumn = false;
+  let hasOfficeEquipmentByDepartmentColumn = false;
   const startDate = expandMonthDate(dateRange.startDate, false);
   const endDate = expandMonthDate(dateRange.endDate, true);
   const startParam = startDate ? params.push(startDate) : null;
@@ -1405,7 +1426,14 @@ export async function fetchApprovalExpenseDetails(dateRange) {
              WHERE table_schema = 'public'
                AND table_name = 'approval_expense_operation'
                AND column_name = 'bonus_by_department'
-           ) AS has_bonus_by_department`
+           ) AS has_bonus_by_department,
+           EXISTS (
+             SELECT 1
+             FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'approval_expense_operation'
+               AND column_name = 'office_equipment_by_department'
+           ) AS has_office_equipment_by_department`
     );
     hasPaymentEventTable = Boolean(capability.rows[0]?.table_name) && Boolean(capability.rows[0]?.has_rule_version);
     // Linked approvals are audit-only. They must never gate monthly-settlement accounting.
@@ -1413,7 +1441,9 @@ export async function fetchApprovalExpenseDetails(dateRange) {
     hasMonthlySettlementDetailsTable = hasMonthlySettlementTable && Boolean(capability.rows[0]?.monthly_details_table);
     hasPurchaseProcessorsTable = Boolean(capability.rows[0]?.purchase_processors_table);
     hasBonusByDepartmentColumn = Boolean(capability.rows[0]?.has_bonus_by_department);
+    hasOfficeEquipmentByDepartmentColumn = Boolean(capability.rows[0]?.has_office_equipment_by_department);
     const bonusByDepartmentSql = bonusByDepartmentSelectSql(hasBonusByDepartmentColumn);
+    const officeEquipmentByDepartmentSql = officeEquipmentByDepartmentSelectSql(hasOfficeEquipmentByDepartmentColumn);
     const result = await client.query(`
       SELECT
         'operation'::text AS expense_kind,
@@ -1452,6 +1482,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
          o.administrative_expense,
          o.individual_income_tax_by_department,
          ${bonusByDepartmentSql} AS bonus_by_department,
+         ${officeEquipmentByDepartmentSql} AS office_equipment_by_department,
          o.it_operation_by_department,
         o.matter_description,
         o.amount,
@@ -1498,6 +1529,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
          o.administrative_expense,
          o.individual_income_tax_by_department,
          ${bonusByDepartmentSql} AS bonus_by_department,
+         ${officeEquipmentByDepartmentSql} AS office_equipment_by_department,
          o.it_operation_by_department,
         o.matter_description,
         o.amount,
@@ -1544,6 +1576,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
          o.administrative_expense,
          o.individual_income_tax_by_department,
          ${bonusByDepartmentSql} AS bonus_by_department,
+         ${officeEquipmentByDepartmentSql} AS office_equipment_by_department,
          o.it_operation_by_department,
         o.matter_description,
         event.amount,
@@ -1597,6 +1630,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
          NULL::varchar AS administrative_expense,
          NULL::jsonb AS individual_income_tax_by_department,
          NULL::jsonb AS bonus_by_department,
+         NULL::jsonb AS office_equipment_by_department,
          NULL::jsonb AS it_operation_by_department,
          ${purchaseMatterDescriptionSql('p', hasPurchaseProcessorsTable)} AS matter_description,
         NULL::numeric AS amount,
@@ -1646,6 +1680,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
          NULL::varchar AS administrative_expense,
          NULL::jsonb AS individual_income_tax_by_department,
          NULL::jsonb AS bonus_by_department,
+         NULL::jsonb AS office_equipment_by_department,
          NULL::jsonb AS it_operation_by_department,
          ${purchaseMatterDescriptionSql('p', hasPurchaseProcessorsTable)} AS matter_description,
         NULL::numeric AS amount,
@@ -1692,6 +1727,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
          NULL::varchar AS administrative_expense,
          NULL::jsonb AS individual_income_tax_by_department,
          NULL::jsonb AS bonus_by_department,
+         NULL::jsonb AS office_equipment_by_department,
          NULL::jsonb AS it_operation_by_department,
         ${monthlySettlementPaymentReasonSql('monthly', hasMonthlySettlementDetailsTable)} AS matter_description,
         event.amount,

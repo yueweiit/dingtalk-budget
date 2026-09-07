@@ -4,11 +4,45 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { bonusByDepartmentSelectSql, mergeExpenseSplitRows, summarizeApprovedDetails } from '../routes/list.js';
+import {
+  bonusByDepartmentSelectSql,
+  mergeExpenseSplitRows,
+  officeEquipmentByDepartmentSelectSql,
+  summarizeApprovedDetails,
+} from '../routes/list.js';
 
 test('uses a NULL JSONB expression when the bonus split column is unavailable', () => {
   assert.equal(bonusByDepartmentSelectSql(true), 'o.bonus_by_department');
   assert.equal(bonusByDepartmentSelectSql(false), 'NULL::jsonb');
+});
+
+test('uses a NULL JSONB expression when the office-equipment split column is unavailable', () => {
+  assert.equal(officeEquipmentByDepartmentSelectSql(true), 'o.office_equipment_by_department');
+  assert.equal(officeEquipmentByDepartmentSelectSql(false), 'NULL::jsonb');
+});
+
+test('keeps office-equipment splits separate from salary and management totals', () => {
+  const [item] = summarizeApprovedDetails([{
+    expense_kind: 'operation',
+    accounting_source: 'completed_department_split',
+    accounting_at: '2026-09-01T10:00:00.000Z',
+    approval_status: 'COMPLETED',
+    result: 'AGREE',
+    base_currency_amount: 456.78,
+    applicant_department: '测试部门',
+    applicant_department_id: 'dept-test',
+    expense_splits: [{
+      department: '测试部门',
+      department_id: 'dept-test',
+      split_type: 'office_equipment',
+      amount: 456.78,
+    }],
+  }]);
+
+  assert.equal(item.officeEquipmentTotal, 456.78);
+  assert.equal(item.salaryTotal, 0);
+  assert.equal(item.managementTotal, 0);
+  assert.equal(item.operationTotal, 456.78);
 });
 
 test('falls back to persisted splits for empty embedded split arrays without duplicating populated ones', () => {

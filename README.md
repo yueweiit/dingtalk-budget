@@ -31,6 +31,7 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - Pending approval auto-retry with backfill mechanism
 - Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
 - Reserve-fund details from the designated Lingxiang-Xingming operation form are split by department only when the same management-expense selection component selects `备用金` and the approval is completed and approved, then shown as a separate reserve-fund category; the amount is included once in actual expense totals and is not merged into ordinary management expense. The existing `bonus` storage key remains for backward compatibility.
+- Office-equipment details from the designated Lingxiang-Xingming operation form are split by department only when `管理费用/Gastos administrativos` selects `办公设备的购置、维修或租赁费/Gastos de adquisición, reparación o alquiler de equipos de oficina` and the approval is completed and approved. They are stored as the independent `office_equipment` category and shown separately in detail, reports, and Excel, without merging into salary, reserve-fund, or ordinary management expense.
 - Historical IT operation split rows remain readable for compatibility with old data; new IT operation selections are handled as ordinary forms by the sync service
 - Historical reporting overrides are applied by exact business number: `202608281007000322547` maps to department `1089765983`, and `202608280953000047922` maps to department `1089533879`; raw database department fields are not changed
 - API Key authentication, rate limiting, circuit breaker
@@ -191,7 +192,7 @@ Open http://localhost:5173 in your browser.
 | Method | Path                            | Description              |
 | ------ | ------------------------------- | ------------------------ |
 | POST   | `/api/sync`                     | Manually sync DingTalk budget data, refresh existing statuses, and optionally trigger expense sync |
-| POST   | `/api/sync/expense-splits`      | Sync operation expense split data (salary, bonus, social insurance, office space) through the expense service |
+| POST   | `/api/sync/expense-splits`      | Sync operation expense split data (salary, reserve fund, office equipment, social insurance, office space) through the expense service |
 | GET    | `/api/list/production`          | Production budget list   |
 | GET    | `/api/list/non-production`      | Non-production budget list |
 | GET    | `/api/list/stats`               | Dashboard statistics     |
