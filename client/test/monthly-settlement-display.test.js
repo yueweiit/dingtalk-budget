@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { expenseDetailSectionDefinitions } from '../src/utils/expenseDetailSections.js';
 import { buildApprovedDetailRows, buildExecutionRows } from '../src/utils/xlsxReport.js';
+
+test('备用金拆分数据进入备用金明细栏目', () => {
+  const section = expenseDetailSectionDefinitions.find((item) => item.key === 'bonus');
+
+  assert.deepEqual(section, { key: 'bonus', title: '备用金明细' });
+});
 
 test('exports a completed monthly settlement detail with its explicit payment label and amount', () => {
   const [row] = buildApprovedDetailRows([{
@@ -44,13 +51,13 @@ test('keeps monthly settlement separate while including it in the execution tota
   assert.equal(row.totalApproved, 60);
 });
 
-test('exports bonus split rows as bonus and includes them in execution totals once', () => {
+test('exports reserve-fund split rows as reserve fund and includes them in execution totals once', () => {
   const [detail] = buildApprovedDetailRows([{
     expense_kind: 'operation',
     accounting_source: 'completed_department_split',
     accounting_at: '2026-08-20T00:00:00.000Z',
     business_id: 'bonus-test',
-    title: '奖金支出',
+    title: '备用金支出',
     applicant_department: '测试部门',
     applicant_department_id: 'dept-test',
     approval_status: 'COMPLETED',
@@ -61,11 +68,11 @@ test('exports bonus split rows as bonus and includes them in execution totals on
       department_id: 'dept-test',
       split_type: 'bonus',
       amount: 1200,
-      note: '季度奖金',
+      note: '备用金',
     }],
   }]);
 
-  assert.equal(detail.expenseType, '奖金');
+  assert.equal(detail.expenseType, '备用金');
   assert.equal(detail.amount, 1200);
 
   const [summary] = buildExecutionRows({

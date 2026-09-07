@@ -630,7 +630,7 @@ const expenseDisplayKind = (item) => item?.accounting_source === 'monthly_settle
 const splitTypeLabel = (value) => {
   const type = String(value || '').trim().toLowerCase();
   if (type === 'salary') return '工资';
-  if (type === 'bonus') return '奖金';
+  if (type === 'bonus') return '备用金';
   if (type === 'social_insurance') return '社保公积金';
   if (type === 'office_space') return '办公场地';
   if (type === 'individual_income_tax') return '个税';
@@ -938,7 +938,7 @@ export const buildReportSummaryRows = ({
   ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
   ['月结付款金额', sumRows(executionRows, 'monthlySettlementApproved').toFixed(2)],
   ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
-  ['奖金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
+  ['备用金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
   ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
   ['个税支出金额', sumRows(executionRows, 'taxApproved').toFixed(2)],
   ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
@@ -1085,7 +1085,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
   ];
 
   const executionSheetRows = [
-    ['序号', '所属部门', '预算归属', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '奖金支出', '办公场地支出', '个税支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
+    ['序号', '所属部门', '预算归属', '月份', '生产预算', '非生产预算', '预算合计', '管理支出', '工资/公积金支出', '备用金支出', '办公场地支出', '个税支出', '实际支出合计', '剩余额度', '执行率', '运营支出单数', '采购支出单数'],
     ...executionRows.map((row, index) => [
       index + 1,
       row.deptName,
@@ -1120,7 +1120,7 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
     ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
     ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
-    ['奖金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
+    ['备用金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
     ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
     ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
     ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],

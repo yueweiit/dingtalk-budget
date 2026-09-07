@@ -466,7 +466,7 @@ function detailAmountOf(item) {
 function splitTypeLabel(value) {
   const type = String(value || '').trim().toLowerCase();
   if (type === 'salary') return '工资';
-  if (type === 'bonus') return '奖金';
+  if (type === 'bonus') return '备用金';
   if (type === 'social_insurance') return '社保公积金';
   if (type === 'office_space') return '办公场地';
   if (type === 'individual_income_tax') return '个税';
@@ -1224,7 +1224,7 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                     toolbox: { feature: { saveAsImage: { title: '保存图片' } }, right: 10 },
                     grid: { top: 60, bottom: 40, left: 60, right: 20 },
                     legend: { data: ['预算', '支出'], top: 10 },
-                       xAxis: { type: 'category', data: ['管理预算明细', '人资', '奖金', '办公场地', '个税'] },
+                       xAxis: { type: 'category', data: ['管理预算明细', '人资', '备用金', '办公场地', '个税'] },
                     yAxis: { type: 'value', axisLabel: { formatter: (v) => v >= 10000 ? (v/10000)+'万' : v } },
                     series: [
                        { name: '预算', type: 'bar', color: '#2f54eb', data: [budget.operation, budget.hr, 0, budget.office, 0], label: { show: true, position: 'top', formatter: (p) => fmtWan(p.value) }, barMaxWidth: 40 },
@@ -1236,7 +1236,7 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                     ['类别', '预算金额', '支出金额', '对比(预算-支出)'],
                     ['管理预算明细', budget.operation.toFixed(2), exp.management.toFixed(2), (budget.operation - exp.management).toFixed(2)],
                      ['人资', budget.hr.toFixed(2), exp.salary.toFixed(2), (budget.hr - exp.salary).toFixed(2)],
-                     ['奖金', '0.00', exp.bonus.toFixed(2), (-exp.bonus).toFixed(2)],
+                     ['备用金', '0.00', exp.bonus.toFixed(2), (-exp.bonus).toFixed(2)],
                      ['办公场地', budget.office.toFixed(2), exp.office.toFixed(2), (budget.office - exp.office).toFixed(2)],
                     ['个税', '0.00', exp.tax.toFixed(2), (-exp.tax).toFixed(2)],
                   ];
@@ -1287,7 +1287,7 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.salary)}</div>
                         </div>
                         <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
-                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>奖金支出</div>
+                          <div style={{ fontSize: 12, color: '#52c41a', marginBottom: 4 }}>备用金支出</div>
                           <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>{fmtWan(exp.bonus)}</div>
                         </div>
                         <div style={{ background: '#f0fff0', padding: 12, borderRadius: 6, textAlign: 'center' }}>
