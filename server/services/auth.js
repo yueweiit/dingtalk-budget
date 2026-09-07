@@ -10,6 +10,12 @@ const SESSION_COOKIE = process.env.AUTH_SESSION_COOKIE || 'budget_session';
 const SSO_PROVIDER_COOKIE = `${SESSION_COOKIE}_sso_provider`;
 const SESSION_TTL_DAYS = Math.max(1, Number(process.env.AUTH_SESSION_TTL_DAYS || 7));
 
+export function shouldUseSecureCookies(env = process.env) {
+  const configured = String(env.AUTH_COOKIE_SECURE || '').trim().toLowerCase();
+  if (configured) return configured === 'true';
+  return env.NODE_ENV === 'production';
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -61,7 +67,7 @@ function parseCookies(header = '') {
 
 function cookieAttributes(maxAgeSeconds) {
   const sameSite = String(process.env.AUTH_COOKIE_SAMESITE || 'Lax').trim();
-  const secure = process.env.AUTH_COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+  const secure = shouldUseSecureCookies();
   return [
     `${SESSION_COOKIE}=`,
     'Path=/',
@@ -73,7 +79,7 @@ function cookieAttributes(maxAgeSeconds) {
 }
 
 function ssoProviderCookieAttributes(maxAgeSeconds) {
-  const secure = process.env.AUTH_COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+  const secure = shouldUseSecureCookies();
   const sameSite = String(process.env.AUTH_COOKIE_SAMESITE || 'Lax').trim();
   return [
     `${SSO_PROVIDER_COOKIE}=`,
@@ -86,7 +92,7 @@ function ssoProviderCookieAttributes(maxAgeSeconds) {
 }
 
 export function setSessionCookie(res, token) {
-  const secure = process.env.AUTH_COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+  const secure = shouldUseSecureCookies();
   const sameSite = String(process.env.AUTH_COOKIE_SAMESITE || 'Lax').trim();
   const parts = [
     `${SESSION_COOKIE}=${encodeURIComponent(token)}`,

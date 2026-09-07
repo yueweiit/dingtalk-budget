@@ -7,12 +7,19 @@ import {
   hashPassword,
   isSuperAdmin,
   verifyPassword,
+  shouldUseSecureCookies,
 } from '../services/auth.js';
 
 test('密码哈希可以验证正确密码并拒绝错误密码', () => {
   const stored = hashPassword('correct-password');
   assert.equal(verifyPassword('correct-password', stored), true);
   assert.equal(verifyPassword('wrong-password', stored), false);
+});
+
+test('显式 Cookie 安全配置优先于运行环境默认值', () => {
+  assert.equal(shouldUseSecureCookies({ NODE_ENV: 'production', AUTH_COOKIE_SECURE: 'false' }), false);
+  assert.equal(shouldUseSecureCookies({ NODE_ENV: 'production', AUTH_COOKIE_SECURE: 'true' }), true);
+  assert.equal(shouldUseSecureCookies({ NODE_ENV: 'production' }), true);
 });
 
 test('超级管理员不受部门范围限制', () => {

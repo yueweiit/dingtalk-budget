@@ -152,6 +152,8 @@ Account provisioning rule: `admin` is the super administrator, and each departme
 
 在后端 `.env` 中配置 `EIMS_ISSUER`（签发方地址）、`EIMS_CLIENT_ID`（客户端标识）、`EIMS_CLIENT_SECRET`（客户端密钥）、`EIMS_REDIRECT_URI`（登录回调地址）、`EIMS_POST_LOGOUT_REDIRECT_URI`（退出回调地址）和 `EIMS_SCOPES`（授权范围）。客户端密钥只能保存在后端环境变量中，不能提交到 Git、前端代码或浏览器请求。EIMS 侧登记的回调地址必须与这两个环境变量完全一致。
 
+生产环境必须使用 HTTPS 并设置 `AUTH_COOKIE_SECURE=true`（安全 Cookie）。仅在本地或临时 HTTP 联调时才将它显式设置为 `false`；该显式值优先于 `NODE_ENV=production`（生产运行环境）的默认值，避免浏览器因 HTTP 拒绝保存登录 Cookie。
+
 When `DINGTALK_SYNC_SOURCE=dingtalk`, `DINGTALK_APP_KEY` and `DINGTALK_APP_SECRET` are required.
 
 When `DINGTALK_SYNC_SOURCE=oa_db`, the budget sync reads approval instances from the `dingtalk_oa` database instead of calling DingTalk directly. In that mode, set `OA_DB_HOST` / `OA_DB_PORT` / `OA_DB_DATABASE` / `OA_DB_USER` / `OA_DB_PASSWORD` if they differ from the main PostgreSQL connection.
