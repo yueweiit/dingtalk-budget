@@ -325,28 +325,6 @@ ${seriesXml}<c:marker val="1"/><c:axId val="1"/><c:axId val="2"/>
 </c:chart></c:chartSpace>`;
 };
 
-const pieChartXml = ({ sheetName, labelCol, valueCol, rowCount, title }) => {
-  const slicesXml = Array.from({ length: rowCount - 1 }, (_, i) =>
-    `<c:dPt><c:idx val="${i}"/><c:spPr><a:solidFill><a:srgbClr val="${CHART_COLORS[i % CHART_COLORS.length]}"/></a:solidFill></c:spPr></c:dPt>`
-  ).join('');
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
-              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-<c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>
-<a:p><a:r><a:rPr lang="zh-CN" sz="1200" b="1"/><a:t>${escapeXml(title)}</a:t></a:r></a:p>
-</c:rich></c:tx></c:title><c:autoTitleDeleted val="0"/>
-<c:plotArea><c:layout/>
-<c:pieChart><c:varyColors val="1"/>
-<c:ser><c:idx val="0"/><c:order val="0"/>
-${slicesXml}
-<c:cat><c:strRef><c:f>'${sheetName}'!$${labelCol}$2:$${labelCol}$${rowCount}</c:f></c:strRef></c:cat>
-<c:val><c:numRef><c:f>'${sheetName}'!$${valueCol}$2:$${valueCol}$${rowCount}</c:f></c:numRef></c:val>
-</c:ser>
-</c:pieChart>
-</c:plotArea><c:legend><c:legendPos val="b"/></c:legend>
-</c:chart></c:chartSpace>`;
-};
-
 const drawingXml = (charts) => {
   const anchors = charts.map((chart, i) => {
     const fromCol = 5; // F
@@ -1341,9 +1319,8 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
 
   const execRateRowCount = execRateRows.length + 1;
 
-  // Sheet index (1-based) → chart definition
+  // Sheet index (1-based) → chart definition. Budget type totals remain a table only.
   const chartDefs = [
-    { sheetIndex: 4, sheetName: '预算类型占比', chart: pieChartXml({ sheetName: '预算类型占比', labelCol: 'A', valueCol: 'B', rowCount: 4, title: '预算类型占比' }) },
     { sheetIndex: 5, sheetName: '部门执行率', chart: barChartXml({ sheetName: '部门执行率', labelCol: 'B', series: [{ col: 'G' }], rowCount: execRateRowCount, title: '各部门执行率', grouping: 'clustered', barDir: 'bar' }) },
   ];
 

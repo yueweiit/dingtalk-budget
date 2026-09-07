@@ -91,3 +91,12 @@ test('导出执行状态包含普通支出表单的审批中金额', async () =>
   const text = new TextDecoder().decode(bytes);
   assert.ok(text.includes('<v>200</v>'));
 });
+
+test('budget type totals remain in the workbook without an embedded pie chart', async () => {
+  const workbook = await workbookXmlText();
+  const budgetTypeSheetName = String.fromCodePoint(0x9884, 0x7b97, 0x7c7b, 0x578b, 0x5360, 0x6bd4);
+  assert.ok(workbook.includes(`name="${budgetTypeSheetName}"`));
+  assert.equal(workbook.includes(`'${budgetTypeSheetName}'!$A$2:$A$4`), false);
+  assert.equal(workbook.includes(`'${budgetTypeSheetName}'!$B$2:$B$4`), false);
+  assert.equal(workbook.includes('drawing4.xml'), false);
+});
