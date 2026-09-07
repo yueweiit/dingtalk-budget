@@ -146,6 +146,12 @@ AUTH_PASSWORD='change-this-password' node scripts/create-user.js --username=dept
 
 Account provisioning rule: `admin` is the super administrator, and each department supervisor uses the stable DingTalk department ID as the username. Passwords are supplied through `AUTH_PASSWORD` or `--password` only during initialization; plaintext passwords and the `budget_users` data are intentionally excluded from GitHub.
 
+### EIMS 单点登录
+
+预算系统可接入 EIMS OAuth2 / OpenID Connect（开放授权 / 开放身份连接）单点登录。后端通过 Discovery（发现文档）获取授权、令牌、用户信息和退出端点，使用授权码与 PKCE（授权码防截获）`S256`（SHA-256）流程。EIMS 返回的 `app_user_id`（业务系统用户标识）必须精确匹配 `budget_users.username`（预算用户账号）；账号未绑定、未启用或角色不匹配时不会创建本地会话。EIMS 不需要预算系统密码，预算角色和数据权限仍由本系统后端执行。
+
+在后端 `.env` 中配置 `EIMS_ISSUER`（签发方地址）、`EIMS_CLIENT_ID`（客户端标识）、`EIMS_CLIENT_SECRET`（客户端密钥）、`EIMS_REDIRECT_URI`（登录回调地址）、`EIMS_POST_LOGOUT_REDIRECT_URI`（退出回调地址）和 `EIMS_SCOPES`（授权范围）。客户端密钥只能保存在后端环境变量中，不能提交到 Git、前端代码或浏览器请求。EIMS 侧登记的回调地址必须与这两个环境变量完全一致。
+
 When `DINGTALK_SYNC_SOURCE=dingtalk`, `DINGTALK_APP_KEY` and `DINGTALK_APP_SECRET` are required.
 
 When `DINGTALK_SYNC_SOURCE=oa_db`, the budget sync reads approval instances from the `dingtalk_oa` database instead of calling DingTalk directly. In that mode, set `OA_DB_HOST` / `OA_DB_PORT` / `OA_DB_DATABASE` / `OA_DB_USER` / `OA_DB_PASSWORD` if they differ from the main PostgreSQL connection.
@@ -192,6 +198,10 @@ Open http://localhost:5173 in your browser.
 | POST   | `/api/auth/login`               | Create a login session |
 | GET    | `/api/auth/me`                  | Current logged-in user |
 | POST   | `/api/auth/logout`              | End the login session |
+| GET    | `/api/auth/eims/start`          | Start EIMS single sign-on |
+| GET    | `/api/auth/eims/callback`       | Receive the EIMS authorization callback |
+| POST   | `/api/auth/eims/logout`         | End local and EIMS sessions |
+| GET    | `/api/auth/eims/logout/callback`| Receive the EIMS logout callback |
 | GET    | `/api/config/scheduler`         | Scheduler status         |
 | POST   | `/api/config/scheduler/start`   | Start scheduler          |
 | POST   | `/api/config/scheduler/stop`    | Stop scheduler           |

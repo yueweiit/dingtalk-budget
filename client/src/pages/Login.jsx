@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { login } from '../api';
+import React, { useEffect, useState } from 'react';
+import { login, startEimsLogin } from '../api';
 
 const styles = {
   page: { minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#eef2f7', padding: 20 },
@@ -17,6 +17,19 @@ export default function Login({ onLoggedIn }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const errorCode = new URLSearchParams(window.location.search).get('sso_error');
+    if (!errorCode) return;
+    const messages = {
+      account_not_bound: '当前 EIMS 账号未绑定预算系统用户',
+      denied: 'EIMS 登录未完成',
+      invalid_state: 'EIMS 登录请求已失效，请重试',
+      unavailable: 'EIMS 登录暂不可用，请稍后重试',
+    };
+    setError(messages[errorCode] || 'EIMS 登录失败，请重试');
+    window.history.replaceState({}, '', window.location.pathname);
+  }, []);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -49,6 +62,9 @@ export default function Login({ onLoggedIn }) {
         <div style={styles.error}>{error}</div>
         <button style={{ ...styles.button, opacity: loading ? 0.65 : 1 }} type="submit" disabled={loading}>
           {loading ? '登录中...' : '登录'}
+        </button>
+        <button style={{ ...styles.button, marginTop: 12, background: '#2563eb' }} type="button" onClick={startEimsLogin}>
+          使用 EIMS 登录
         </button>
       </form>
     </main>

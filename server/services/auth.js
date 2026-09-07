@@ -7,6 +7,7 @@ export const AUTH_ROLES = Object.freeze({
 });
 
 const SESSION_COOKIE = process.env.AUTH_SESSION_COOKIE || 'budget_session';
+const SSO_PROVIDER_COOKIE = `${SESSION_COOKIE}_sso_provider`;
 const SESSION_TTL_DAYS = Math.max(1, Number(process.env.AUTH_SESSION_TTL_DAYS || 7));
 
 function sha256(value) {
@@ -71,6 +72,19 @@ function cookieAttributes(maxAgeSeconds) {
   ].filter(Boolean).join('; ');
 }
 
+function ssoProviderCookieAttributes(maxAgeSeconds) {
+  const secure = process.env.AUTH_COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+  const sameSite = String(process.env.AUTH_COOKIE_SAMESITE || 'Lax').trim();
+  return [
+    `${SSO_PROVIDER_COOKIE}=`,
+    'Path=/',
+    `Max-Age=${maxAgeSeconds}`,
+    `SameSite=${sameSite}`,
+    secure ? 'Secure' : '',
+    'HttpOnly',
+  ].filter(Boolean).join('; ');
+}
+
 export function setSessionCookie(res, token) {
   const secure = process.env.AUTH_COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
   const sameSite = String(process.env.AUTH_COOKIE_SAMESITE || 'Lax').trim();
@@ -87,6 +101,15 @@ export function setSessionCookie(res, token) {
 
 export function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', cookieAttributes(0));
+}
+
+export function setEimsSessionMarker(res) {
+  const maxAgeSeconds = SESSION_TTL_DAYS * 86400;
+  res.append('Set-Cookie', ssoProviderCookieAttributes(maxAgeSeconds).replace(`${SSO_PROVIDER_COOKIE}=`, `${SSO_PROVIDER_COOKIE}=eims`));
+}
+
+export function clearEimsSessionMarker(res) {
+  res.append('Set-Cookie', ssoProviderCookieAttributes(0));
 }
 
 function publicUser(row) {
@@ -114,7 +137,10 @@ export async function loadSession(req, _res, next) {
       [sha256(token)]
     );
     if (result.rows[0]) {
-      req.authUser = publicUser(result.rows[0]);
+      req.authUser = {
+        ...publicUser(result.rows[0]),
+        authProvider: parseCookies(req.headers.cookie || '')[SSO_PROVIDER_COOKIE] === 'eims' ? 'eims' : null,
+      };
       await query('UPDATE budget_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token_hash = $1', [sha256(token)]);
     }
   } catch (error) {

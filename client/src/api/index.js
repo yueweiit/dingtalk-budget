@@ -30,6 +30,15 @@ export async function logout() {
   return response.data;
 }
 
+export function startEimsLogin() {
+  window.location.assign('/api/auth/eims/start');
+}
+
+export async function logoutFromEims() {
+  const response = await api.post('/auth/eims/logout');
+  return response.data;
+}
+
 // 同步钉钉数据
 export async function syncData(startTime, endTime, options = {}) {
   const response = await api.post('/sync', { startTime, endTime, ...options }, { timeout: 600000 });

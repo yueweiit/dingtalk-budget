@@ -102,6 +102,14 @@ NODE_ENV=production
 # expense 项目地址
 YUNYING_API_BASE=http://localhost:3002
 
+# EIMS 单点登录（客户端密钥仅保存在服务器 .env）
+EIMS_ISSUER=https://你的EIMS域名
+EIMS_CLIENT_ID=你的EIMS客户端ID
+EIMS_CLIENT_SECRET=你的EIMS客户端密钥
+EIMS_REDIRECT_URI=https://你的域名/api/auth/eims/callback
+EIMS_POST_LOGOUT_REDIRECT_URI=https://你的域名/api/auth/eims/logout/callback
+EIMS_SCOPES=openid profile email
+
 # Sync
 SYNC_CRON=2 * * * *
 ```

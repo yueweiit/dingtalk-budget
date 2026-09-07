@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import BudgetList from './pages/BudgetList';
 import VisualReport from './pages/VisualReportEchartsStyle';
 import Login from './pages/Login';
-import { getCurrentUser, logout } from './api';
+import { getCurrentUser, logout, logoutFromEims } from './api';
 
 function App() {
   const [page, setPage] = useState('list');
@@ -20,6 +20,15 @@ function App() {
   if (!user) return <Login onLoggedIn={setUser} />;
 
   const handleLogout = async () => {
+    if (user?.authProvider === 'eims') {
+      try {
+        const result = await logoutFromEims();
+        window.location.assign(result.data.logoutUrl);
+        return;
+      } catch {
+        // Fall through to local session cleanup when the EIMS endpoint is unavailable.
+      }
+    }
     await logout().catch(() => {});
     setUser(null);
     setPage('list');
