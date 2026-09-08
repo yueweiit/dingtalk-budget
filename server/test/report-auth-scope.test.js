@@ -96,6 +96,41 @@ test('导出报表会裁剪保存在旧 JSON 字段中的跨部门拆分', () =>
   assert.equal(JSON.stringify(exportRow).includes('其他部门'), false);
 });
 
+test('部门主管只能看到动态管理费用 JSONB 中属于自己的分类拆分', () => {
+  const details = [{
+    business_id: 'form-dynamic-administrative-split',
+    applicant_department: '其他部门',
+    applicant_department_id: 'dept-other',
+    amount: 1000,
+    base_currency_amount: 1000,
+    administrative_by_department: [
+      {
+        department: '悦为智能',
+        department_id: 'dept-yw',
+        amount: 300,
+        categoryKey: 'individual-income-tax',
+        categoryName: '个税',
+      },
+      {
+        department: '其他部门',
+        department_id: 'dept-other',
+        amount: 700,
+        categoryKey: 'office-equipment',
+        categoryName: '办公设备购置费',
+      },
+    ],
+  }];
+
+  const [scoped] = scopeExpenseDetailsForUser(details, supervisor);
+  assert.equal(scoped.base_currency_amount, 300);
+  assert.deepEqual(scoped.expense_splits.map((entry) => [
+    entry.department_id,
+    entry.category_key,
+    entry.category_name,
+  ]), [['dept-yw', 'individual-income-tax', '个税']]);
+  assert.equal(JSON.stringify(scoped).includes('办公设备购置费'), false);
+});
+
 test('无拆分的可见表单也不暴露提交人的其他部门', () => {
   const [row] = scopeExpenseDetailsForUser([{
     business_id: 'form-direct-visible',

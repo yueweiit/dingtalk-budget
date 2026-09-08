@@ -619,6 +619,15 @@ const splitTypeLabel = (value) => {
   return value || '部门拆分';
 };
 
+const splitDisplayLabel = (entry) => {
+  const type = String(entry?.splitType || entry?.split_type || '').trim().toLowerCase();
+  if (type === 'administrative') {
+    const categoryName = String(entry?.categoryName || entry?.category_name || '').trim();
+    return `${categoryName || '管理费用'}明细`;
+  }
+  return splitTypeLabel(entry?.splitType || entry?.split_type);
+};
+
 const extractExpenseDeptSplits = (item) => {
   const entries = [];
   const dbSplits = item?.expense_splits || item?.expenseSplits;
@@ -636,6 +645,8 @@ const extractExpenseDeptSplits = (item) => {
           departmentIdentityKey: rollupDepartmentId ? `id:${rollupDepartmentId}` : departmentIdentityKey(entry),
           amount: amt,
           splitType: entry.split_type || entry.splitType || '',
+          categoryKey: entry.category_key || entry.categoryKey || null,
+          categoryName: entry.category_name || entry.categoryName || null,
           note: entry.note || '',
           rollupDepartment,
         });
@@ -648,6 +659,7 @@ const extractExpenseDeptSplits = (item) => {
     { col: 'salary_by_department', splitType: 'salary' },
     { col: 'bonus_by_department', splitType: 'bonus' },
     { col: 'office_equipment_by_department', splitType: 'office_equipment' },
+    { col: 'administrative_by_department', splitType: 'administrative' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
@@ -669,6 +681,8 @@ const extractExpenseDeptSplits = (item) => {
           departmentIdentityKey: rollupDepartmentId ? `id:${rollupDepartmentId}` : departmentIdentityKey(entry),
           amount: amt,
           splitType,
+          categoryKey: entry.category_key || entry.categoryKey || null,
+          categoryName: entry.category_name || entry.categoryName || null,
           note: entry.note || '',
           rollupDepartment,
         });
@@ -742,7 +756,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
       // 有部门拆分：直接使用 approval_expense_dept_split.amount，不再按原单总额二次分摊。
       return splits.map((entry) => ({
          expenseKind: expenseDisplayKind(item),
-         expenseType: splitTypeLabel(entry.splitType),
+         expenseType: splitDisplayLabel(entry),
          splitType: entry.splitType,
          department: entry.department,
         departmentId: entry.departmentId,
@@ -766,7 +780,7 @@ export const buildApprovedDetailRows = (approvedExpenseDetails = []) => {
         paymentEvidence,
         paymentAmount: item.accounting_source === 'payment_event' || item.accounting_source === 'monthly_settlement' ? entry.amount : '',
         bizAction: item.biz_action,
-        splitNote: `${splitTypeLabel(entry.splitType)}拆分自 ${item.business_id || ''}${entry.note ? `：${entry.note}` : ''}`,
+        splitNote: `${splitDisplayLabel(entry)}拆分自 ${item.business_id || ''}${entry.note ? `：${entry.note}` : ''}`,
         rollupDepartment: entry.rollupDepartment || firstValue(item, ['rollup_dept_name', 'rollupDeptName']),
       }));
     })
@@ -898,6 +912,35 @@ export const buildExecutionRows = ({ productionRows, operationRows, approvedExpe
 
 export const sumRows = (rows, key) => rows.reduce((sum, row) => sum + toAmount(row[key]), 0);
 
+const optionalExpenseSummaryRows = (executionRows) => [
+  ['月结付款金额', sumRows(executionRows, 'monthlySettlementApproved')],
+  ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved')],
+  ['备用金支出金额', sumRows(executionRows, 'bonusApproved')],
+  ['办公设备支出金额', sumRows(executionRows, 'officeEquipmentApproved')],
+  ['办公场地支出金额', sumRows(executionRows, 'officeApproved')],
+  ['个税支出金额', sumRows(executionRows, 'taxApproved')],
+]
+  .filter(([, amount]) => amount !== 0)
+  .map(([label, amount]) => [label, amount.toFixed(2)]);
+
+const dynamicAdministrativeSummaryRows = (approvedDetailRows) => {
+  const amounts = new Map();
+
+  for (const row of approvedDetailRows) {
+    if (String(row?.splitType || '').trim().toLowerCase() !== 'administrative') continue;
+
+    const label = String(row?.expenseType || '').trim();
+    const amount = toAmount(row?.baseCurrencyAmount || row?.amount);
+    if (!label || amount === 0) continue;
+
+    amounts.set(label, (amounts.get(label) || 0) + amount);
+  }
+
+  return [...amounts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+    .map(([label, amount]) => [label, amount.toFixed(2)]);
+};
+
 export const buildReportSummaryRows = ({
   productionCount,
   nonProductionCount,
@@ -919,12 +962,8 @@ export const buildReportSummaryRows = ({
   ['生产预算金额', sumRows(executionRows, 'productionBudget').toFixed(2)],
   ['非生产预算金额', sumRows(executionRows, 'nonProductionBudget').toFixed(2)],
   ['管理支出金额', sumRows(executionRows, 'managementApproved').toFixed(2)],
-  ['月结付款金额', sumRows(executionRows, 'monthlySettlementApproved').toFixed(2)],
-  ['工资/公积金支出金额', sumRows(executionRows, 'salaryApproved').toFixed(2)],
-  ['备用金支出金额', sumRows(executionRows, 'bonusApproved').toFixed(2)],
-  ['办公设备支出金额', sumRows(executionRows, 'officeEquipmentApproved').toFixed(2)],
-  ['办公场地支出金额', sumRows(executionRows, 'officeApproved').toFixed(2)],
-  ['个税支出金额', sumRows(executionRows, 'taxApproved').toFixed(2)],
+  ...optionalExpenseSummaryRows(executionRows),
+  ...dynamicAdministrativeSummaryRows(approvedDetailRows),
   ['实际支出合计', sumRows(executionRows, 'totalApproved').toFixed(2)],
   ['有提交预算部门支出合计', sumRows(executionRows, 'budgetSubmittedApprovedTotal').toFixed(2)],
   ['剩余额度', sumRows(executionRows, 'remainingBudget').toFixed(2)],
