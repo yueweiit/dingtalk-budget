@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   bonusByDepartmentSelectSql,
+  administrativeByDepartmentSelectSql,
   mergeExpenseSplitRows,
   officeEquipmentByDepartmentSelectSql,
   summarizeApprovedDetails,
@@ -19,6 +20,11 @@ test('uses a NULL JSONB expression when the bonus split column is unavailable', 
 test('uses a NULL JSONB expression when the office-equipment split column is unavailable', () => {
   assert.equal(officeEquipmentByDepartmentSelectSql(true), 'o.office_equipment_by_department');
   assert.equal(officeEquipmentByDepartmentSelectSql(false), 'NULL::jsonb');
+});
+
+test('uses a NULL JSONB expression when the dynamic administrative split column is unavailable', () => {
+  assert.equal(administrativeByDepartmentSelectSql(true), 'o.administrative_by_department');
+  assert.equal(administrativeByDepartmentSelectSql(false), 'NULL::jsonb');
 });
 
 test('keeps office-equipment splits separate from salary and management totals', () => {

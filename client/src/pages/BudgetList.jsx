@@ -8,7 +8,7 @@ import * as echarts from 'echarts';
 
 import { getAllBudgetList, getProductionList, getNonProductionList, getStats, getBudgetDetail, getReportData } from '../api';
 import { createBudgetReportWorkbook, expenseDetailText, saveWorkbook } from '../utils/xlsxReport';
-import { expenseDetailSectionDefinitions } from '../utils/expenseDetailSections';
+import { visibleExpenseDetailSections } from '../utils/expenseDetailSections';
 import { departmentMatches } from '../utils/departmentIdentity.js';
 import { expenseDetailSplitRecord } from '../utils/expenseDetailSplit.js';
 import { formatUtcDateTime, formatUtcMonth } from '../utils/utcDate.js';
@@ -488,8 +488,12 @@ function expenseDisplayKind(item) {
     : expenseKindLabel(item?.expense_kind);
 }
 
-function sectionKeyForSplit(splitType) {
-  const type = String(splitType || '').trim().toLowerCase();
+function sectionKeyForSplit(split) {
+  const type = String(split?.splitType || split?.split_type || '').trim().toLowerCase();
+  if (type === 'administrative') {
+    const categoryKey = String(split?.categoryKey || split?.category_key || split?.categoryName || split?.category_name || '未分类').trim();
+    return `administrative:${categoryKey}`;
+  }
   if (type === 'salary' || type === 'social_insurance') return 'salary';
   if (type === 'office_space') return 'office';
   if (type === 'individual_income_tax') return 'tax';
@@ -508,6 +512,8 @@ function extractDetailSplits(item) {
         queryMonth: item?.query_month,
         amount: toNum(entry.amount),
         splitType: entry.split_type || entry.splitType || '',
+        categoryKey: entry.category_key || entry.categoryKey || null,
+        categoryName: entry.category_name || entry.categoryName || null,
         note: entry.note || '',
       }))
       .filter((entry) => entry.department && entry.amount > 0);
@@ -517,6 +523,7 @@ function extractDetailSplits(item) {
     { col: 'salary_by_department', splitType: 'salary' },
     { col: 'bonus_by_department', splitType: 'bonus' },
     { col: 'office_equipment_by_department', splitType: 'office_equipment' },
+    { col: 'administrative_by_department', splitType: 'administrative' },
     { col: 'social_insurance_by_department', splitType: 'social_insurance' },
     { col: 'office_space_by_department', splitType: 'office_space' },
     { col: 'individual_income_tax_by_department', splitType: 'individual_income_tax' },
@@ -537,6 +544,8 @@ function extractDetailSplits(item) {
           queryMonth: item?.query_month,
           amount,
           splitType,
+          categoryKey: entry.category_key || entry.categoryKey || null,
+          categoryName: entry.category_name || entry.categoryName || null,
           note: entry.note || '',
         });
       }
@@ -578,11 +587,15 @@ function directExpenseDetailRow(item, amount, note = '', paymentSequence = 0, pa
 }
 
 function splitExpenseDetailRow(item, split, paymentSequence = 0, paymentCount = 0) {
-  const label = splitTypeLabel(split.splitType);
+  const categoryName = String(split.categoryName || split.category_name || '').trim();
+  const label = String(split.splitType || '').trim().toLowerCase() === 'administrative'
+    ? `${categoryName || '管理费用'}明细`
+    : splitTypeLabel(split.splitType);
   return {
     ...expenseDetailBase(item, paymentSequence, paymentCount),
     amount: split.amount,
     expenseType: label,
+    categoryName,
     note: firstNonEmpty(split.note, `${label}拆分`),
   };
 }
@@ -624,7 +637,8 @@ function buildExpenseDetailSections(rawDetails, detail, budgetMonth) {
 
       for (const split of splits) {
         if (!matchesExpenseDetailDepartment(targetDepartment, split)) continue;
-        const sectionKey = sectionKeyForSplit(split.splitType);
+        const sectionKey = sectionKeyForSplit(split);
+        if (!sections[sectionKey]) sections[sectionKey] = [];
         sections[sectionKey].push(splitExpenseDetailRow(item, split, paymentSequence, paymentCount));
       }
 
@@ -653,7 +667,11 @@ function expenseBreakdownFromSections(sections) {
   const officeEquipmentRows = sections?.office_equipment || [];
   const officeRows = sections?.office || [];
   const taxRows = sections?.tax || [];
-  const management = operationPurchaseRows.reduce((sum, row) => sum + toNum(row.amount), 0);
+  const administrativeRows = Object.entries(sections || {})
+    .filter(([key]) => key.startsWith('administrative:'))
+    .flatMap(([, rows]) => rows || []);
+  const management = [...operationPurchaseRows, ...administrativeRows]
+    .reduce((sum, row) => sum + toNum(row.amount), 0);
   const salary = salaryRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const bonus = bonusRows.reduce((sum, row) => sum + toNum(row.amount), 0);
   const officeEquipment = officeEquipmentRows.reduce((sum, row) => sum + toNum(row.amount), 0);
@@ -671,7 +689,7 @@ function expenseBreakdownFromSections(sections) {
     tax,
     itOperation: 0,
     total: management + salary + bonus + officeEquipment + office + tax,
-    rowCount: operationPurchaseRows.length + salaryRows.length + bonusRows.length + officeEquipmentRows.length + officeRows.length + taxRows.length,
+    rowCount: operationPurchaseRows.length + salaryRows.length + bonusRows.length + officeEquipmentRows.length + officeRows.length + taxRows.length + administrativeRows.length,
   };
 }
 
@@ -1336,7 +1354,7 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
 
                       <div style={styles.expenseDetails}>
                         <h3 style={{ margin: '4px 0 0', fontSize: 16, fontWeight: 600 }}>支出明细</h3>
-                        {expenseDetailSectionDefinitions.map((section) => (
+                        {visibleExpenseDetailSections(expenseSections).map((section) => (
                           <ExpenseDetailSection
                             key={section.key}
                             title={section.title}

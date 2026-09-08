@@ -31,12 +31,21 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - Pending approval auto-retry with backfill mechanism
 - Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
 - Reserve-fund details from the designated Lingxiang-Xingming operation form are split by department only when the same management-expense selection component selects `备用金` and the approval is completed and approved, then shown as a separate reserve-fund category; the amount is included once in actual expense totals and is not merged into ordinary management expense. The existing `bonus` storage key remains for backward compatibility.
-- Office-equipment details from the designated Lingxiang-Xingming operation form are split by department only when `管理费用/Gastos administrativos` selects `办公设备的购置、维修或租赁费/Gastos de adquisición, reparación o alquiler de equipos de oficina` and the approval is completed and approved. They are stored as the independent `office_equipment` category and shown separately in detail, reports, and Excel, without merging into salary, reserve-fund, or ordinary management expense.
+- Historical office-equipment split records remain readable. New office-equipment and other management-fee options from the designated Lingxiang-Xingming operation form use the dynamic administrative category described below.
 - Historical IT operation split rows remain readable for compatibility with old data; new IT operation selections are handled as ordinary forms by the sync service
 - Historical reporting overrides are applied by exact business number: `202608281007000322547` maps to department `1089765983`, and `202608280953000047922` maps to department `1089533879`; raw database department fields are not changed
 - API Key authentication, rate limiting, circuit breaker
 - User login with superadmin and department-supervisor roles
 - Backend-enforced department scope: supervisors see their department and descendants; superadmins see all data
+
+## Dynamic Administrative Department Details
+
+For the Lingxiang-Xingming operation process `PROC-E7BC3316-E618-4812-BDCC-7A655A7C694B`, reserve fund, office-space total cost, and social-insurance/housing-fund remain independent department-detail types. When `管理支出/Gastos de operación` is `管理费用/Gastos administrativos`, the budget service reads dynamic `administrative` split rows produced by the sync service.
+
+- `category_name` is the Chinese value selected in the secondary management-expense component, and UI/Excel labels it as `<分类名称>明细`.
+- Detail cards and export rows are created only for categories with data in the current department and month; categories are never merged across `category_key`. The export Summary sheet separately totals every dynamic category with data, such as `安保费明细`, and omits all zero-value optional categories.
+- Department-scope authorization filters dynamic split rows before summaries, list details, reports, and exports. The server also falls back to `administrative_by_department` from the operation record if the split read model is temporarily unavailable.
+- The older `office_equipment` split is retained only for historical readability. New administrative options, including office equipment, must use the dynamic split category after the expense-sync schema migration.
 
 ## Tech Stack
 

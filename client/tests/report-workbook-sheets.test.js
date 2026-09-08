@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBudgetReportWorkbook, expenseDetailText } from '../src/utils/xlsxReport.js';
 
-const workbookXmlText = async () => {
-  const blob = createBudgetReportWorkbook({});
+const workbookXmlText = async (data = {}) => {
+  const blob = createBudgetReportWorkbook(data);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return new TextDecoder().decode(bytes);
 };
@@ -38,7 +38,13 @@ test('导出报表只保留当前工作表并移除标记页签', async () => {
 });
 
 test('执行报表包含备用金列且不包含 IT 运维独立列', async () => {
-  const workbook = await workbookXmlText();
+  const workbook = await workbookXmlText({
+    approvedExpenses: [{
+      dept_name: '测试部门',
+      month: '2026-09',
+      bonusTotal: 1,
+    }],
+  });
   assert.ok(workbook.includes('备用金支出'));
   assert.equal(workbook.includes('IT运维费用支出'), false);
   assert.equal(workbook.includes('运营支出金额（含历史IT运维）'), false);
@@ -92,11 +98,10 @@ test('导出执行状态包含普通支出表单的审批中金额', async () =>
   assert.ok(text.includes('<v>200</v>'));
 });
 
-test('budget type totals remain in the workbook without an embedded pie chart', async () => {
+test('导出报表不包含任何嵌入式图表或绘图文件', async () => {
   const workbook = await workbookXmlText();
-  const budgetTypeSheetName = String.fromCodePoint(0x9884, 0x7b97, 0x7c7b, 0x578b, 0x5360, 0x6bd4);
-  assert.ok(workbook.includes(`name="${budgetTypeSheetName}"`));
-  assert.equal(workbook.includes(`'${budgetTypeSheetName}'!$A$2:$A$4`), false);
-  assert.equal(workbook.includes(`'${budgetTypeSheetName}'!$B$2:$B$4`), false);
-  assert.equal(workbook.includes('drawing4.xml'), false);
+  assert.equal(workbook.includes('xl/charts/'), false);
+  assert.equal(workbook.includes('xl/drawings/'), false);
+  assert.equal(workbook.includes('relationships/drawing'), false);
+  assert.equal(workbook.includes('<drawing '), false);
 });

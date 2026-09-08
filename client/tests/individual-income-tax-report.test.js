@@ -77,5 +77,5 @@ test('exports historical IT operation as ordinary operation expense', () => {
     executionRows,
   });
 
-  assert.ok(summaryRows.some(([label, value]) => label === '备用金支出金额' && value === '0.00'));
+  assert.equal(summaryRows.some(([label]) => label === '备用金支出金额'), false);
 });
