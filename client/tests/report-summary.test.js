@@ -155,3 +155,70 @@ test('导出报表汇总行会包含有提交预算部门支出合计字段', ()
 
   assert.ok(summaryRows.some(([label, value]) => label === '有提交预算部门支出合计' && value === '15.00'));
 });
+
+test('导出报表汇总仅保留有金额的可选支出分类', () => {
+  const summaryRows = buildReportSummaryRows({
+    productionCount: 0,
+    nonProductionCount: 0,
+    productionRows: [],
+    operationRows: [],
+    approvedDetailRows: [],
+    budgetShareRows: [],
+    expenseShareRows: [],
+    executionRows: [{
+      monthlySettlementApproved: 0,
+      salaryApproved: 120,
+      bonusApproved: 0,
+      officeEquipmentApproved: 0,
+      officeApproved: 88.5,
+      taxApproved: 0,
+      managementApproved: 0,
+      totalApproved: 208.5,
+      budgetSubmittedApprovedTotal: 0,
+      remainingBudget: -208.5,
+    }],
+  });
+
+  const labels = new Set(summaryRows.map(([label]) => label));
+  assert.ok(labels.has('工资/公积金支出金额'));
+  assert.ok(labels.has('办公场地支出金额'));
+  assert.equal(labels.has('月结付款金额'), false);
+  assert.equal(labels.has('备用金支出金额'), false);
+  assert.equal(labels.has('办公设备支出金额'), false);
+  assert.equal(labels.has('个税支出金额'), false);
+});
+
+test('导出报表汇总会按动态管理费用分类汇总有数据的明细', () => {
+  const summaryRows = buildReportSummaryRows({
+    productionCount: 0,
+    nonProductionCount: 0,
+    productionRows: [],
+    operationRows: [],
+    approvedDetailRows: [
+      { splitType: 'administrative', expenseType: '安保费明细', amount: 100, baseCurrencyAmount: 100 },
+      { splitType: 'administrative', expenseType: '安保费明细', amount: 50, baseCurrencyAmount: 50 },
+      { splitType: 'administrative', expenseType: '平台使用费明细', amount: 20, baseCurrencyAmount: 20 },
+      { splitType: 'salary', expenseType: '工资明细', amount: 999, baseCurrencyAmount: 999 },
+      { splitType: 'administrative', expenseType: '零值分类明细', amount: 0, baseCurrencyAmount: 0 },
+    ],
+    budgetShareRows: [],
+    expenseShareRows: [],
+    executionRows: [{
+      monthlySettlementApproved: 0,
+      salaryApproved: 0,
+      bonusApproved: 0,
+      officeEquipmentApproved: 0,
+      officeApproved: 0,
+      taxApproved: 0,
+      managementApproved: 170,
+      totalApproved: 170,
+      budgetSubmittedApprovedTotal: 0,
+      remainingBudget: -170,
+    }],
+  });
+
+  assert.ok(summaryRows.some(([label, value]) => label === '安保费明细' && value === '150.00'));
+  assert.ok(summaryRows.some(([label, value]) => label === '平台使用费明细' && value === '20.00'));
+  assert.equal(summaryRows.some(([label]) => label === '工资明细'), false);
+  assert.equal(summaryRows.some(([label]) => label === '零值分类明细'), false);
+});

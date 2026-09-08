@@ -7,6 +7,58 @@ import {
 } from '../src/utils/xlsxReport.js';
 import { departmentMatches } from '../src/utils/departmentIdentity.js';
 import { expenseDetailSplitRecord } from '../src/utils/expenseDetailSplit.js';
+import { visibleExpenseDetailSections } from '../src/utils/expenseDetailSections.js';
+
+test('dynamic administrative sections only show categories that have department data', () => {
+  const sections = visibleExpenseDetailSections({
+    operationPurchase: [],
+    salary: [],
+    bonus: [],
+    office: [],
+    tax: [],
+    'administrative:individual-income-tax': [{ categoryName: '个税', amount: 100 }],
+    'administrative:office-equipment': [{ categoryName: '办公设备购置费', amount: 200 }],
+  });
+
+  assert.deepEqual(sections, [
+    { key: 'administrative:office-equipment', title: '办公设备购置费明细' },
+    { key: 'administrative:individual-income-tax', title: '个税明细' },
+  ]);
+});
+
+test('Excel keeps dynamic administrative categories separate', () => {
+  const rows = buildApprovedDetailRows([{
+    expense_kind: 'operation',
+    accounting_source: 'completed_department_split',
+    accounting_at: '2026-09-01T00:00:00.000Z',
+    business_id: 'administrative-split-test',
+    applicant_department: '测试部门',
+    applicant_department_id: 'dept-test',
+    expense_splits: [
+      {
+        department: '测试部门',
+        department_id: 'dept-test',
+        split_type: 'administrative',
+        category_key: 'individual-income-tax',
+        category_name: '个税',
+        amount: 100,
+      },
+      {
+        department: '测试部门',
+        department_id: 'dept-test',
+        split_type: 'administrative',
+        category_key: 'office-equipment',
+        category_name: '办公设备购置费',
+        amount: 200,
+      },
+    ],
+  }]);
+
+  assert.deepEqual(rows.map((row) => [row.expenseType, row.amount]), [
+    ['个税明细', 100],
+    ['办公设备购置费明细', 200],
+  ]);
+});
 
 test('Excel 执行明细按部门 ID 区分同名部门', () => {
   const rows = buildExecutionRows({

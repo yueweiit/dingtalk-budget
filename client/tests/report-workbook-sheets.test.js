@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBudgetReportWorkbook, expenseDetailText } from '../src/utils/xlsxReport.js';
 
-const workbookXmlText = async () => {
-  const blob = createBudgetReportWorkbook({});
+const workbookXmlText = async (data = {}) => {
+  const blob = createBudgetReportWorkbook(data);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return new TextDecoder().decode(bytes);
 };
@@ -38,7 +38,13 @@ test('导出报表只保留当前工作表并移除标记页签', async () => {
 });
 
 test('执行报表包含备用金列且不包含 IT 运维独立列', async () => {
-  const workbook = await workbookXmlText();
+  const workbook = await workbookXmlText({
+    approvedExpenses: [{
+      dept_name: '测试部门',
+      month: '2026-09',
+      bonusTotal: 1,
+    }],
+  });
   assert.ok(workbook.includes('备用金支出'));
   assert.equal(workbook.includes('IT运维费用支出'), false);
   assert.equal(workbook.includes('运营支出金额（含历史IT运维）'), false);
