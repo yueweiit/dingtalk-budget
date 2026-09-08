@@ -98,11 +98,10 @@ test('导出执行状态包含普通支出表单的审批中金额', async () =>
   assert.ok(text.includes('<v>200</v>'));
 });
 
-test('budget type totals remain in the workbook without an embedded pie chart', async () => {
+test('导出报表不包含任何嵌入式图表或绘图文件', async () => {
   const workbook = await workbookXmlText();
-  const budgetTypeSheetName = String.fromCodePoint(0x9884, 0x7b97, 0x7c7b, 0x578b, 0x5360, 0x6bd4);
-  assert.ok(workbook.includes(`name="${budgetTypeSheetName}"`));
-  assert.equal(workbook.includes(`'${budgetTypeSheetName}'!$A$2:$A$4`), false);
-  assert.equal(workbook.includes(`'${budgetTypeSheetName}'!$B$2:$B$4`), false);
-  assert.equal(workbook.includes('drawing4.xml'), false);
+  assert.equal(workbook.includes('xl/charts/'), false);
+  assert.equal(workbook.includes('xl/drawings/'), false);
+  assert.equal(workbook.includes('relationships/drawing'), false);
+  assert.equal(workbook.includes('<drawing '), false);
 });
