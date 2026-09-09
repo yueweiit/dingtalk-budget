@@ -14,6 +14,7 @@ import {
   isBudgetRequest,
 } from '../services/parser.js';
 import { getDepartmentSnapshot, resolveServiceEntityDepartment } from '../services/department-tree.js';
+import { synchronizeEffectiveBudgetQuota } from '../services/effective-budget-quota.js';
 import { query, pool } from '../db/index.js';
 import { assertValidTable } from '../utils/db.js';
 import { requireRole, AUTH_ROLES } from '../services/auth.js';
@@ -21,7 +22,7 @@ import { requireRole, AUTH_ROLES } from '../services/auth.js';
 // getStatus 需要直接 import 用于状态对比
 function getStatusFromData(detail) {
   const statusStr = String(detail.status || '').toUpperCase();
-  const resultStr = String(detail.result || detail.flowResult || '').toLowerCase();
+  const resultStr = String(detail.result || detail.flowResult || detail.flow_result || '').toLowerCase();
   const bizActionStr = String(detail.bizAction || detail.biz_action || '').toUpperCase();
   const taskResults = Array.isArray(detail.tasks)
     ? detail.tasks.map((task) => String(task?.result || '').toLowerCase())
@@ -175,6 +176,46 @@ export async function enrichBudgetDepartmentSnapshot(
   );
 }
 
+function budgetDetailGroups(detail, budgetType) {
+  if (budgetType === 'production') {
+    return [
+      { subjectType: 'material', sourceTable: 'budget_material', items: parseMaterialItems(detail) },
+      { subjectType: 'production_expense', sourceTable: 'budget_production', items: parseProductionItems(detail) },
+      { subjectType: 'labor', sourceTable: 'budget_labor', items: parseLaborItems(detail) },
+    ];
+  }
+
+  return [
+    { subjectType: 'hr', sourceTable: 'budget_hr', items: parseHrItems(detail) },
+    { subjectType: 'office', sourceTable: 'budget_office', items: parseOfficeItems(detail) },
+    { subjectType: 'operation', sourceTable: 'budget_operation', items: parseOperationItems(detail) },
+  ];
+}
+
+async function refreshEffectiveBudgetQuota(detail, budgetType) {
+  const budget = await enrichBudgetDepartmentSnapshot(
+    budgetType === 'production' ? parseProductionBudget(detail) : parseNonProductionBudget(detail)
+  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await synchronizeEffectiveBudgetQuota(client, {
+      detail,
+      budget,
+      budgetType,
+      detailGroups: budgetDetailGroups(detail, budgetType),
+      approved: getApprovalState(detail).approved,
+    });
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function getApprovalState(detail) {
   const statusStr = String(detail.status || '').toUpperCase();
   const resultStr = String(detail.result || detail.flowResult || '').toLowerCase();
@@ -319,6 +360,9 @@ export async function refreshExistingBudgetStatuses(options = {}) {
       }
 
       const statusResult = await updateExistingBudgetStatus(tableName, row.form_no, detail);
+      if (isBudgetRequest(detail)) {
+        await refreshEffectiveBudgetQuota(detail, row.budget_kind);
+      }
       if (statusResult.updated) {
         summary.updated++;
       } else {
@@ -509,6 +553,9 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
 
   const existingStatus = await updateExistingBudgetStatus(tableName, formNo, detail);
   if (existingStatus.updated) {
+    if (isBudgetRequest(detail)) {
+      await refreshEffectiveBudgetQuota(detail, budgetType);
+    }
     return {
       success: true,
       synced: 0,
@@ -547,6 +594,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
         await query(`UPDATE ${tableName} SET status = $1 WHERE form_no = $2`, [dingtalkStatus, formNo]);
         console.log(`[SYNC] Pending status updated: ${formNo}, ${existCheck.rows[0].status} -> ${dingtalkStatus}`);
       }
+      await refreshEffectiveBudgetQuota(detail, budgetType);
       return {
         success: true, synced: 0, added: 0, updated: 1, existing: 0,
         pending: approvalState.retryable ? 1 : 0, skipped: 0, processInstanceId, formNo,
@@ -583,6 +631,7 @@ export async function syncDingtalkInstance(processInstanceId, options = {}) {
 
   if (existCheck.rows.length > 0) {
     if (!updateExisting) {
+      await refreshEffectiveBudgetQuota(detail, budgetType);
       console.log(`[SYNC] Already exists, no update: formNo=${formNo}`);
       return {
         success: true,
@@ -729,6 +778,13 @@ async function insertRecord(processInstanceId, detail, budgetType) {
       for (const item of parseLaborItems(detail)) {
         await insertProductionDetail(client, 'budget_labor', item);
       }
+      await synchronizeEffectiveBudgetQuota(client, {
+        detail,
+        budget,
+        budgetType,
+        detailGroups: budgetDetailGroups(detail, budgetType),
+        approved: getApprovalState(detail).approved,
+      });
     } else {
       const budget = await enrichBudgetDepartmentSnapshot(parseNonProductionBudget(detail));
       await client.query(
@@ -750,6 +806,13 @@ async function insertRecord(processInstanceId, detail, budgetType) {
       for (const item of parseOperationItems(detail)) {
         await insertNonProductionDetail(client, 'budget_operation', item);
       }
+      await synchronizeEffectiveBudgetQuota(client, {
+        detail,
+        budget,
+        budgetType,
+        detailGroups: budgetDetailGroups(detail, budgetType),
+        approved: getApprovalState(detail).approved,
+      });
     }
 
     await client.query('COMMIT');
@@ -794,6 +857,13 @@ async function updateRecord(processInstanceId, detail, budgetType) {
       for (const item of parseLaborItems(detail)) {
         await insertProductionDetail(client, 'budget_labor', item);
       }
+      await synchronizeEffectiveBudgetQuota(client, {
+        detail,
+        budget,
+        budgetType,
+        detailGroups: budgetDetailGroups(detail, budgetType),
+        approved: getApprovalState(detail).approved,
+      });
     } else {
       const budget = await enrichBudgetDepartmentSnapshot(parseNonProductionBudget(detail));
       await client.query(
@@ -818,6 +888,13 @@ async function updateRecord(processInstanceId, detail, budgetType) {
       for (const item of parseOperationItems(detail)) {
         await insertNonProductionDetail(client, 'budget_operation', item);
       }
+      await synchronizeEffectiveBudgetQuota(client, {
+        detail,
+        budget,
+        budgetType,
+        detailGroups: budgetDetailGroups(detail, budgetType),
+        approved: getApprovalState(detail).approved,
+      });
     }
 
     await client.query('COMMIT');

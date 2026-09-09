@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import BudgetList from './pages/BudgetList';
 import VisualReport from './pages/VisualReportEchartsStyle';
+import BudgetConfiguration from './pages/BudgetConfiguration';
 import Login from './pages/Login';
 import { getCurrentUser, logout, logoutFromEims } from './api';
 
@@ -38,7 +39,18 @@ function App() {
     return <VisualReport onBack={() => setPage('list')} user={user} onLogout={handleLogout} />;
   }
 
-  return <BudgetList onGoToVisual={() => setPage('visual')} user={user} onLogout={handleLogout} />;
+  if (page === 'configuration') {
+    return <BudgetConfiguration onBack={() => setPage('list')} user={user} onLogout={handleLogout} />;
+  }
+
+  return (
+    <BudgetList
+      onGoToVisual={() => setPage('visual')}
+      onGoToConfiguration={() => setPage('configuration')}
+      user={user}
+      onLogout={handleLogout}
+    />
+  );
 }
 
 export default App;

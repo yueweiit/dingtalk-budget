@@ -873,7 +873,7 @@ function downloadCSV(rows, filename) {
   a.href = URL.createObjectURL(blob); a.download = filename; a.click();
 }
 
-export default function BudgetList({ onGoToVisual, user, onLogout }) {
+export default function BudgetList({ onGoToVisual, onGoToConfiguration, user, onLogout }) {
   const [activeTab, setActiveTab] = useState('all');
   const [startDate, setStartDate] = useState(monthStart());
   const [endDate, setEndDate] = useState(monthEnd());
@@ -1074,6 +1074,14 @@ export default function BudgetList({ onGoToVisual, user, onLogout }) {
                 onClick={onGoToVisual}
               >
                 可视化报表
+              </button>
+            )}
+            {user?.role === 'superadmin' && onGoToConfiguration && (
+              <button
+                style={{ ...styles.exportButton, background: '#0f766e', borderColor: '#0f766e' }}
+                onClick={onGoToConfiguration}
+              >
+                预算配置
               </button>
             )}
             <button

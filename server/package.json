@@ -7,6 +7,9 @@
     "dev": "node --watch index.js",
     "test": "node --test",
     "sync:dingtalk": "node scripts/sync-dingtalk.js",
+    "migrate:effective-quota": "node scripts/ensure-effective-budget-quota.js",
+    "backfill:effective-quota": "node scripts/backfill-effective-budget-quota.js",
+    "reconcile:effective-organizations": "node scripts/reconcile-effective-budget-organizations.js",
     "user:create": "node scripts/create-user.js"
   },
   "dependencies": {

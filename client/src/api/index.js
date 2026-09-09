@@ -109,6 +109,16 @@ export async function getReportData(params) {
   return response.data;
 }
 
+export async function getQuotaConfigurationOptions() {
+  const response = await api.get('/quota-configurations/options');
+  return response.data;
+}
+
+export async function getQuotaConfigurations(params = {}) {
+  const response = await api.get('/quota-configurations', { params });
+  return response.data;
+}
+
 // 获取定时任务状态
 export async function getSchedulerStatus() {
   const response = await api.get('/config/scheduler');

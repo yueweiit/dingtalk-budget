@@ -42,6 +42,7 @@ import listRouter from './routes/list.js';
 import configRouter from './routes/config.js';
 import dingtalkRouter from './routes/dingtalk.js';
 import authRouter from './routes/auth.js';
+import quotaConfigurationRouter from './routes/quota-configurations.js';
 import { loadSession } from './services/auth.js';
 import { startScheduler } from './services/scheduler.js';
 
@@ -102,6 +103,7 @@ app.use('/api/list', listRouter);
 app.use('/api/config', configRouter);
 app.use('/api/dingtalk', dingtalkRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/quota-configurations', quotaConfigurationRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

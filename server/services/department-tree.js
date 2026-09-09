@@ -62,6 +62,81 @@ function text(value) {
   return normalized || null;
 }
 
+function normalizeOrganizationName(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isYueweiRootName(value) {
+  return [
+    'yuewei',
+    '悦为集团',
+    '悦为集团yuewei grupo',
+  ].includes(normalizeOrganizationName(value));
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
+}
+
+export function buildCurrentOrganizationOptions(rows = []) {
+  const groups = new Map();
+  const companies = new Map();
+  const departments = new Map();
+
+  for (const row of rows) {
+    const ids = asArray(row.path_ids);
+    const names = asArray(row.path_names);
+    const groupIndex = names.findIndex(isYueweiRootName);
+    if (groupIndex < 0 || !ids[groupIndex] || !names[groupIndex]) continue;
+
+    const group = {
+      id: ids[groupIndex],
+      name: names[groupIndex],
+    };
+    groups.set(group.id, group);
+
+    const companyIndex = groupIndex + 1;
+    if (!ids[companyIndex] || !names[companyIndex]) continue;
+    const company = {
+      id: ids[companyIndex],
+      name: names[companyIndex],
+      group_dept_id: group.id,
+      group_name: group.name,
+    };
+    companies.set(company.id, company);
+
+    // The direct child of the group is the company itself. Every deeper node
+    // is a selectable department, including nested departments.
+    const departmentId = text(row.dept_id);
+    const departmentName = text(row.name) || names[names.length - 1];
+    if (ids.length <= companyIndex + 1 || !departmentId || !departmentName) continue;
+    departments.set(departmentId, {
+      id: departmentId,
+      name: departmentName,
+      company_dept_id: company.id,
+      company_name: company.name,
+      group_dept_id: group.id,
+      group_name: group.name,
+    });
+  }
+
+  const sortByName = (left, right) => left.name.localeCompare(right.name, 'zh-CN');
+  return {
+    groups: [...groups.values()].sort(sortByName),
+    companies: [...companies.values()].sort(sortByName),
+    departments: [...departments.values()].sort(sortByName),
+  };
+}
+
+export async function listCurrentOrganizationOptions(query = oaPool.query.bind(oaPool)) {
+  const result = await query(`
+    SELECT corp_id, dept_id, name, path_ids, path_names
+    FROM ding_department_tree
+    WHERE is_current = true
+  `);
+  return buildCurrentOrganizationOptions(result.rows);
+}
+
 function pickUniqueDepartment(rows) {
   const candidates = new Map();
   for (const row of rows) {

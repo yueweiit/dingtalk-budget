@@ -115,7 +115,7 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function buildOaDbDetail(row) {
+export function buildOaDbDetail(row) {
   const raw = row?.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
   const originator = raw.originator && typeof raw.originator === 'object'
     ? raw.originator
@@ -128,6 +128,7 @@ function buildOaDbDetail(row) {
 
   return {
     ...raw,
+    corpId: raw.corpId || raw.corp_id || row.corp_id || '',
     processInstanceId: raw.processInstanceId || row.process_instance_id,
     processCode: raw.processCode || row.process_code,
     title: raw.title || row.title || '',
@@ -189,7 +190,7 @@ async function getProcessInstanceDetailFromOaDb(processInstanceId) {
   const pool = ensureOaDbPool();
   const result = await pool.query(
     `
-      SELECT process_instance_id, process_code, title, status, result,
+      SELECT corp_id, process_instance_id, process_code, title, status, result,
              originator_user_id, originator_user_name, originator_dept_id, originator_dept_name,
              create_time, finish_time, form_component_values, raw_payload
       FROM ding_approval_instance
