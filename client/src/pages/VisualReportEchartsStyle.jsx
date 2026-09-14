@@ -16,6 +16,7 @@ import {
   YAxis,
 } from 'recharts';
 import DateFilter from '../components/DateFilter';
+import ChangePasswordModal from '../components/ChangePasswordModal';
 import { getReportData } from '../api';
 import {
   buildApprovedDetailRows,
@@ -172,6 +173,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [startDate, setStartDate] = useState(monthStart());
   const [endDate, setEndDate] = useState(monthEnd());
   const [reportData, setReportData] = useState(null);
@@ -285,6 +287,9 @@ export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
               退出登录
             </button>
           )}
+          <button style={styles.refreshButton} onClick={() => setPasswordModalOpen(true)}>
+            修改密码
+          </button>
         </div>
 
         <div style={styles.toolbar}>
@@ -463,6 +468,7 @@ export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
           </div>
         </div>
       </div>
+        {passwordModalOpen && <ChangePasswordModal onClose={() => setPasswordModalOpen(false)} />}
     </div>
   );
 }

@@ -48,6 +48,43 @@ export function verifyPassword(password, storedHash) {
   }
 }
 
+export function validatePasswordChangeInput(currentPassword, newPassword, confirmPassword) {
+  if (!currentPassword || !newPassword || !confirmPassword) return '当前密码、新密码和确认密码不能为空';
+  if (newPassword.length < 8) return '新密码至少需要 8 个字符';
+  if (newPassword.length > 200) return '新密码不能超过 200 个字符';
+  if (newPassword !== confirmPassword) return '两次输入的新密码不一致';
+  if (currentPassword === newPassword) return '新密码不能与当前密码相同';
+  return null;
+}
+
+export async function changePassword(
+  userId,
+  currentPassword,
+  newPassword,
+  confirmPassword,
+  dbQuery = query,
+) {
+  const validationMessage = validatePasswordChangeInput(currentPassword, newPassword, confirmPassword);
+  if (validationMessage) return { ok: false, code: 'INVALID_INPUT', message: validationMessage };
+
+  const result = await dbQuery(
+    `SELECT password_hash FROM budget_users WHERE id = $1 AND active = true`,
+    [userId]
+  );
+  const user = result.rows[0];
+  if (!user || !verifyPassword(currentPassword, user.password_hash)) {
+    return { ok: false, code: 'INVALID_CURRENT_PASSWORD', message: '当前密码错误' };
+  }
+
+  await dbQuery(
+    `UPDATE budget_users
+     SET password_hash = $1, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $2 AND active = true`,
+    [hashPassword(newPassword), userId]
+  );
+  return { ok: true };
+}
+
 function parseCookies(header = '') {
   return String(header).split(';').reduce((cookies, part) => {
     const separator = part.indexOf('=');

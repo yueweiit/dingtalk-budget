@@ -7,6 +7,8 @@ import {
   hashPassword,
   isSuperAdmin,
   verifyPassword,
+  validatePasswordChangeInput,
+  changePassword,
   shouldUseSecureCookies,
 } from '../services/auth.js';
 
@@ -14,6 +16,36 @@ test('密码哈希可以验证正确密码并拒绝错误密码', () => {
   const stored = hashPassword('correct-password');
   assert.equal(verifyPassword('correct-password', stored), true);
   assert.equal(verifyPassword('wrong-password', stored), false);
+});
+
+test('修改密码校验输入并只更新当前用户的哈希', async () => {
+  assert.equal(validatePasswordChangeInput('old-password', 'short', 'short'), '新密码至少需要 8 个字符');
+  assert.equal(validatePasswordChangeInput('old-password', 'new-password', 'different-password'), '两次输入的新密码不一致');
+
+  const oldHash = hashPassword('old-password');
+  const calls = [];
+  const result = await changePassword('user-1', 'old-password', 'new-password', 'new-password', async (sql, params) => {
+    calls.push({ sql, params });
+    if (calls.length === 1) return { rows: [{ password_hash: oldHash }] };
+    return { rows: [] };
+  });
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].params, ['user-1']);
+  assert.deepEqual(calls[1].params.slice(1), ['user-1']);
+  assert.equal(verifyPassword('new-password', calls[1].params[0]), true);
+});
+
+test('修改密码拒绝错误的当前密码', async () => {
+  const result = await changePassword('user-1', 'wrong-password', 'new-password', 'new-password', async () => ({
+    rows: [{ password_hash: hashPassword('old-password') }],
+  }));
+  assert.deepEqual(result, {
+    ok: false,
+    code: 'INVALID_CURRENT_PASSWORD',
+    message: '当前密码错误',
+  });
 });
 
 test('显式 Cookie 安全配置优先于运行环境默认值', () => {

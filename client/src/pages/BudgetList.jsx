@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import DateFilter from '../components/DateFilter';
 import SyncButton from '../components/SyncButton';
 import ExpenseSplitSyncButton from '../components/ExpenseSplitSyncButton';
+import ChangePasswordModal from '../components/ChangePasswordModal';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts';
 
@@ -888,6 +889,7 @@ export default function BudgetList({ onGoToVisual, onGoToConfiguration, user, on
   const [detailExpense, setDetailExpense] = useState(null);
   const [detailExpenseRaw, setDetailExpenseRaw] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const chartRef = useRef(null);
 
   const activeTitle = useMemo(
@@ -1024,6 +1026,7 @@ export default function BudgetList({ onGoToVisual, onGoToConfiguration, user, on
                 />
               </>
             )}
+            <button type="button" onClick={() => setPasswordModalOpen(true)} style={styles.exportButton}>修改密码</button>
             <button type="button" onClick={onLogout} style={styles.exportButton}>退出登录</button>
           </div>
         </div>
@@ -1378,6 +1381,7 @@ export default function BudgetList({ onGoToVisual, onGoToConfiguration, user, on
           </div>
         )}
       </div>
+      {passwordModalOpen && <ChangePasswordModal onClose={() => setPasswordModalOpen(false)} />}
     </div>
   );
 }

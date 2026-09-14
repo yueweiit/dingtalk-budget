@@ -5,6 +5,7 @@ import {
   clearSessionCookie,
   createSession,
   deleteSession,
+  changePassword,
   loadSession,
   publicUser,
   requireAuth,
@@ -79,6 +80,23 @@ router.post('/logout', loadSession, async (req, res) => {
     clearEimsSessionMarker(res);
   }
   return res.json({ success: true });
+});
+
+router.post('/change-password', requireAuth, async (req, res) => {
+  try {
+    const result = await changePassword(
+      req.authUser.id,
+      String(req.body?.currentPassword || ''),
+      String(req.body?.newPassword || ''),
+      String(req.body?.confirmPassword || ''),
+    );
+    if (result.ok) return res.json({ success: true, message: '密码修改成功' });
+    const status = result.code === 'INVALID_CURRENT_PASSWORD' ? 401 : 400;
+    return res.status(status).json({ success: false, code: result.code, message: result.message });
+  } catch (error) {
+    console.error('[AUTH] Change password error:', error);
+    return res.status(500).json({ success: false, message: '密码修改服务暂不可用' });
+  }
 });
 
 router.get('/eims/start', async (_req, res) => {

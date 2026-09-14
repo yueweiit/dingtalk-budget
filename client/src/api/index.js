@@ -30,6 +30,15 @@ export async function logout() {
   return response.data;
 }
 
+export async function changePassword(currentPassword, newPassword, confirmPassword) {
+  const response = await api.post('/auth/change-password', {
+    currentPassword,
+    newPassword,
+    confirmPassword,
+  });
+  return response.data;
+}
+
 export function startEimsLogin() {
   window.location.assign('/api/auth/eims/start');
 }

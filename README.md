@@ -154,6 +154,8 @@ AUTH_PASSWORD='change-this-password' node scripts/create-user.js --username=dept
 
 `superadmin` can view all budgets, reports, exports, and approvals and can run synchronization or scheduler operations. `department_supervisor` can view only records whose department ID is the assigned ID or whose department path contains that ID; synchronization and scheduler management are denied. Department names are display snapshots only and are not used as permission keys.
 
+已登录用户可在列表页或可视化报表页选择“修改密码”，输入当前密码和新密码完成自助修改。新密码至少 8 个字符；系统只保存 `scrypt` 哈希，不保存明文密码。
+
 Account provisioning rule: `admin` is the super administrator, and each department supervisor uses the stable DingTalk department ID as the username. Passwords are supplied through `AUTH_PASSWORD` or `--password` only during initialization; plaintext passwords and the `budget_users` data are intentionally excluded from GitHub.
 
 ### EIMS 单点登录
@@ -210,6 +212,7 @@ Open http://localhost:5173 in your browser.
 | POST   | `/api/auth/login`               | Create a login session |
 | GET    | `/api/auth/me`                  | Current logged-in user |
 | POST   | `/api/auth/logout`              | End the login session |
+| POST   | `/api/auth/change-password`     | Change the current user's password |
 | GET    | `/api/auth/eims/start`          | Start EIMS single sign-on |
 | GET    | `/api/auth/eims/callback`       | Receive the EIMS authorization callback |
 | POST   | `/api/auth/eims/logout`         | End local and EIMS sessions |
