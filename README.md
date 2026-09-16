@@ -176,6 +176,8 @@ Report and Excel export authorization is enforced on the server. For a departmen
 
 列表、详情、报表和 Excel（电子表格）导出的实际支出统一只统计整单 `COMPLETED`（已完成）且最终结果为同意/通过、并且存在 `approval_completed_at`（审批完成时间）的记录；月份按该时间的 UTC（世界协调时间）月份计算。最终结果优先读取 OA 原始数据的 `result`，为空时才兼容回退到 `flowResult`、`flow_result`。预算申请金额仍按原提交时间和原有效状态逻辑统计，不受本规则改变。
 
+工资、备用金、社保公积金、办公场地、个税及管理费用动态明细等运营单，只要存在标准部门拆分行，或历史兼容字段中的部门拆分 JSON，就按部门拆分口径展示。这类单据不会再进入通用“运营/采购支出明细”的整单付款事件或整单完成态兜底，避免同一张单同时出现在通用明细和专项明细中。历史 JSON 拆分字段只作为读取兼容，不改变原始审批数据，也不触发数据库回填。
+
 ### 3. Install Dependencies
 
 ```bash
