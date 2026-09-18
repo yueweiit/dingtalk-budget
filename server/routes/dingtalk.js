@@ -1,7 +1,12 @@
 import express from 'express';
+import crypto from 'node:crypto';
 import { query } from '../db/index.js';
 import { buildConnectorDepartmentFilter } from '../services/connector-department-query.js';
 import { sharedBudgetRollupDepartment } from '../services/yw-tech-shared-budget.js';
+import {
+  attachExpenseAmounts,
+  buildBudgetedDepartmentMonthSet,
+} from './list.js';
 import { assertValidTable } from '../utils/db.js';
 import { buildDepartmentScopeSql } from '../services/auth.js';
 
@@ -128,6 +133,120 @@ export async function resolveConnectorBudgetDepartment(queryParams, month) {
   };
 }
 
+function normalizeAlertMonth(value) {
+  const match = String(value || '').trim().match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
+  if (!match) return '';
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return '';
+  return `${match[1]}-${String(month).padStart(2, '0')}`;
+}
+
+function nonNegativeAmount(value) {
+  const amount = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+function internalAlertKeyMatches(receivedKey, configuredKey) {
+  const received = String(receivedKey || '');
+  const configured = String(configuredKey || '').trim();
+  if (!received || !configured) return false;
+  const receivedBuffer = Buffer.from(received);
+  const configuredBuffer = Buffer.from(configured);
+  return receivedBuffer.length === configuredBuffer.length
+    && crypto.timingSafeEqual(receivedBuffer, configuredBuffer);
+}
+
+export function calculateBudgetAlertSnapshot({ budgetAmount, usedAmount, applicationAmount }) {
+  const budget = nonNegativeAmount(budgetAmount);
+  const used = nonNegativeAmount(usedAmount);
+  const application = nonNegativeAmount(applicationAmount);
+  if (budget === null || used === null || application === null) {
+    throw new Error('预算快照金额必须是非负数字');
+  }
+
+  const projectedAmount = Number((used + application).toFixed(2));
+  const utilizationRate = budget > 0 ? Number((projectedAmount / budget).toFixed(6)) : null;
+  const alertLevel = budget <= 0
+    ? 'missing_budget'
+    : projectedAmount > budget
+      ? 'over_budget'
+      : projectedAmount >= budget * 0.9
+        ? 'warning_90'
+        : 'normal';
+
+  return {
+    budgetAmount: Number(budget.toFixed(2)),
+    usedAmount: Number(used.toFixed(2)),
+    applicationAmount: Number(application.toFixed(2)),
+    projectedAmount,
+    utilizationRate,
+    alertLevel,
+  };
+}
+
+export async function findAlertBudgetRow({ departmentId, month, type }, dbQuery = query) {
+  const normalizedMonth = normalizeAlertMonth(month);
+  const rawDepartmentId = String(departmentId || '').trim();
+  if (!rawDepartmentId || !normalizedMonth) return null;
+
+  const tableName = resolveTableName(type);
+  const sharedBudgetDepartment = sharedBudgetRollupDepartment({ dept_id: rawDepartmentId }, normalizedMonth);
+  const resolvedDepartmentId = sharedBudgetDepartment?.department_id || rawDepartmentId;
+  const amountColumn = tableName === 'production_budget' ? 'monthly_budget_amount' : 'budget_amount';
+  const result = await dbQuery(
+    `SELECT *, COALESCE(${amountColumn}, 0) AS alert_budget_amount
+     FROM ${tableName}
+     WHERE BTRIM(COALESCE(dept_id::text, '')) = $1
+       AND COALESCE(NULLIF(budget_month, ''), NULLIF(declaration_month, '')) = $2
+     ORDER BY create_time DESC NULLS LAST, id DESC
+     LIMIT 1`,
+    [resolvedDepartmentId, normalizedMonth]
+  );
+  const row = result.rows[0];
+  return row ? {
+    row,
+    tableName,
+    month: normalizedMonth,
+    departmentId: resolvedDepartmentId,
+  } : null;
+}
+
+export async function resolveAlertBudgetSnapshot(input, dependencies = {}) {
+  const findBudget = dependencies.findBudget || findAlertBudgetRow;
+  const attachExpenses = dependencies.attachExpenses || attachExpenseAmounts;
+  const budget = await findBudget(input);
+  const applicationAmount = nonNegativeAmount(input.applicationAmount);
+  if (applicationAmount === null) throw new Error('申请金额必须是非负数字');
+  if (!budget) {
+    return {
+      month: normalizeAlertMonth(input.month),
+      departmentId: String(input.departmentId || '').trim(),
+      alertLevel: 'missing_budget',
+      budgetAmount: 0,
+      usedAmount: 0,
+      applicationAmount,
+      projectedAmount: applicationAmount,
+      utilizationRate: null,
+    };
+  }
+
+  const [withExpenses] = await attachExpenses([budget.row], {
+    startDate: budget.month,
+    endDate: budget.month,
+    budgetedDepartmentMonths: buildBudgetedDepartmentMonthSet([budget.row]),
+  });
+  return {
+    departmentId: budget.departmentId,
+    month: budget.month,
+    budgetTable: budget.tableName,
+    ...calculateBudgetAlertSnapshot({
+      budgetAmount: budget.row.alert_budget_amount,
+      usedAmount: withExpenses?.approved_amount || 0,
+      applicationAmount,
+    }),
+  };
+}
+
 // GET /api/dingtalk/querySimple - 钉钉专用简化接口
 router.get('/querySimple', async (req, res) => {
   try {
@@ -238,6 +357,34 @@ router.get('/querySimple', async (req, res) => {
   } catch (error) {
     console.error('[ERROR] Query error:', error);
     res.status(500).json({ success: false, message: isProduction ? '查询失败' : '查询失败: ' + error.message });
+  }
+});
+
+// Internal-only snapshot used by the OA alert service. It intentionally
+// returns totals only, never approval or expense detail rows.
+router.get('/alert-budget-snapshot', async (req, res) => {
+  const configuredKey = process.env.BUDGET_ALERT_API_KEY;
+  if (!configuredKey) {
+    return res.status(503).json({ success: false, message: '预算预警接口未配置' });
+  }
+  if (!internalAlertKeyMatches(req.headers['x-budget-alert-key'], configuredKey)) {
+    return res.status(401).json({ success: false, message: '未授权' });
+  }
+
+  try {
+    const snapshot = await resolveAlertBudgetSnapshot({
+      departmentId: req.query.departmentId || req.query.department_id,
+      month: req.query.month || req.query.applicationDate,
+      type: req.query.type || req.query.budgetType,
+      applicationAmount: req.query.applicationAmount,
+    });
+    return res.json({ success: true, data: snapshot });
+  } catch (error) {
+    console.error('[alert-budget-snapshot] 查询失败:', error);
+    return res.status(400).json({
+      success: false,
+      message: isProduction ? '预算预警查询失败' : error.message,
+    });
   }
 });
 

@@ -142,6 +142,7 @@ Optional variables:
 | `RETRY_COUNT`           | `3`                  | Max retry attempts             |
 | `CB_FAILURE_THRESHOLD`  | `5`                  | Failures before circuit opens  |
 | `EXPENSE_SYNC_URL`      | (empty)              | Optional expense sync service URL, e.g. `http://localhost:3002` |
+| `BUDGET_ALERT_API_KEY`  | (disabled)           | OA budget-alert internal API shared secret |
 
 ### User Roles
 
@@ -221,7 +222,10 @@ Open http://localhost:5173 in your browser.
 | POST   | `/api/config/scheduler/start`   | Start scheduler          |
 | POST   | `/api/config/scheduler/stop`    | Stop scheduler           |
 | GET    | `/api/dingtalk/querySimple`     | DingTalk bot query       |
+| GET    | `/api/dingtalk/alert-budget-snapshot` | Internal budget-alert snapshot; requires `X-Budget-Alert-Key` and returns aggregate amounts only |
 | GET    | `/api/health`                   | Health check             |
+
+The budget-alert snapshot endpoint is only for the OA alert service. It reuses the production budget, shared-department rollup, and actual-expense aggregation rules, and returns budget, used, application, projected amounts and alert level without exposing approval or expense detail rows.
 
 ## Database Schema
 

@@ -83,7 +83,7 @@ app.use('/api/', loadSession);
 const API_KEY = process.env.API_KEY;
 if (API_KEY) {
   app.use('/api/', (req, res, next) => {
-    if (req.path === '/health' || req.path.startsWith('/auth/')) return next();
+    if (req.path === '/health' || req.path.startsWith('/auth/') || req.path === '/dingtalk/alert-budget-snapshot') return next();
     if (req.authUser && !req.path.startsWith('/dingtalk')) return next();
     const key = req.headers['x-api-key'] || req.query.apiKey;
     if (key !== API_KEY) {
