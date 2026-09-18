@@ -615,6 +615,24 @@ export function mergeExpenseSplitRows(details = [], persistedRows = []) {
   return [...embeddedRows, ...fallbackRows];
 }
 
+export function legacyJsonExpenseSplitRows(item) {
+  const businessId = String(item?.business_id || '').trim();
+  return extractDeptSplitEntries(item).map((entry) => ({
+    business_id: businessId,
+    split_type: entry.splitType,
+    category_key: entry.category_key || null,
+    category_name: entry.category_name || null,
+    category: splitExpenseCategory(entry.splitType),
+    department: entry.department,
+    department_id: entry.department_id || null,
+    department_source: entry.department_source || 'name_only',
+    department_path_ids: entry.department_path_ids || null,
+    department_path_names: entry.department_path_names || null,
+    amount: entry.amount,
+    note: '',
+  }));
+}
+
 async function attachExpenseSplitsToDetails(details) {
   const rows = Array.isArray(details) ? details : [];
   if (rows.length === 0) return rows;
@@ -643,14 +661,17 @@ async function attachExpenseSplitsToDetails(details) {
     splitMap.set(businessId, current);
   }
 
-  return rows.map((item) => ({
-    ...item,
+  return rows.map((item) => {
     // A payment event can be partial. Its comment does not identify the
     // department split, so safely keep it on the applicant department.
-    expense_splits: isPaymentEventExpense(item)
-      ? []
-      : splitMap.get(String(item.business_id || '').trim()) || [],
-  }));
+    if (isPaymentEventExpense(item)) return { ...item, expense_splits: [] };
+
+    const persistedSplits = splitMap.get(String(item.business_id || '').trim()) || [];
+    return {
+      ...item,
+      expense_splits: persistedSplits.length > 0 ? persistedSplits : legacyJsonExpenseSplitRows(item),
+    };
+  });
 }
 
 function buildAllocatedExpenseItems(rows) {
@@ -1342,6 +1363,38 @@ function paymentEventDateExpr(alias) {
   return `((` + `${alias}.paid_at AT TIME ZONE 'UTC')::date)`;
 }
 
+const DEPARTMENT_SPLIT_JSON_COLUMNS = [
+  'salary_by_department',
+  'bonus_by_department',
+  'office_equipment_by_department',
+  'administrative_by_department',
+  'social_insurance_by_department',
+  'office_space_by_department',
+  'individual_income_tax_by_department',
+  'it_operation_by_department',
+];
+
+/**
+ * A split may have been persisted in the normalized table or only in the
+ * legacy JSONB columns. Both forms must prevent whole-form accounting.
+ */
+export function departmentSplitEvidenceSql(alias, splitJsonColumns = DEPARTMENT_SPLIT_JSON_COLUMNS) {
+  const normalizedSplit = `EXISTS (
+    SELECT 1
+    FROM approval_expense_dept_split split
+    WHERE split.business_id = ${alias}.business_id
+  )`;
+  const embeddedSplits = splitJsonColumns.map((column) => (
+    `COALESCE(jsonb_array_length(
+      CASE WHEN jsonb_typeof(${alias}.${column}) = 'array'
+        THEN ${alias}.${column}
+        ELSE '[]'::jsonb
+      END
+    ), 0) > 0`
+  )).join(' OR ');
+  return embeddedSplits ? `(${normalizedSplit} OR ${embeddedSplits})` : normalizedSplit;
+}
+
 function isPaymentEventExpense(item) {
   return (item?.accounting_source === 'payment_event' || item?.accounting_source === 'monthly_settlement')
     && Boolean(item?.accounting_at);
@@ -1363,6 +1416,13 @@ export async function fetchApprovalExpenseDetails(dateRange) {
   let hasBonusByDepartmentColumn = false;
   let hasOfficeEquipmentByDepartmentColumn = false;
   let hasAdministrativeByDepartmentColumn = false;
+  let departmentSplitJsonColumns = [
+    'salary_by_department',
+    'social_insurance_by_department',
+    'office_space_by_department',
+    'individual_income_tax_by_department',
+    'it_operation_by_department',
+  ];
   const startDate = expandMonthDate(dateRange.startDate, false);
   const endDate = expandMonthDate(dateRange.endDate, true);
   const startParam = startDate ? params.push(startDate) : null;
@@ -1392,19 +1452,11 @@ export async function fetchApprovalExpenseDetails(dateRange) {
   };
 
   const completedDepartmentSplitWhere = (alias) => `${completedApprovedExpenseWhere(alias)}
-    AND EXISTS (
-      SELECT 1
-      FROM approval_expense_dept_split split
-      WHERE split.business_id = ${alias}.business_id
-    )
+    AND ${departmentSplitEvidenceSql(alias, departmentSplitJsonColumns)}
     `;
 
   const completedApprovalFallbackWhere = (alias, hasDepartmentSplit) => `${completedApprovedExpenseWhere(alias)}
-    ${hasDepartmentSplit ? `AND NOT EXISTS (
-      SELECT 1
-      FROM approval_expense_dept_split split
-      WHERE split.business_id = ${alias}.business_id
-    )` : ''}
+    ${hasDepartmentSplit ? `AND NOT ${departmentSplitEvidenceSql(alias, departmentSplitJsonColumns)}` : ''}
     ${hasPaymentEventTable ? `AND NOT EXISTS (
       SELECT 1
       FROM approval_expense_payment_events event
@@ -1467,6 +1519,12 @@ export async function fetchApprovalExpenseDetails(dateRange) {
     hasBonusByDepartmentColumn = Boolean(capability.rows[0]?.has_bonus_by_department);
     hasOfficeEquipmentByDepartmentColumn = Boolean(capability.rows[0]?.has_office_equipment_by_department);
     hasAdministrativeByDepartmentColumn = Boolean(capability.rows[0]?.has_administrative_by_department);
+    departmentSplitJsonColumns = [
+      ...departmentSplitJsonColumns,
+      ...(hasBonusByDepartmentColumn ? ['bonus_by_department'] : []),
+      ...(hasOfficeEquipmentByDepartmentColumn ? ['office_equipment_by_department'] : []),
+      ...(hasAdministrativeByDepartmentColumn ? ['administrative_by_department'] : []),
+    ];
     const bonusByDepartmentSql = bonusByDepartmentSelectSql(hasBonusByDepartmentColumn);
     const officeEquipmentByDepartmentSql = officeEquipmentByDepartmentSelectSql(hasOfficeEquipmentByDepartmentColumn);
     const administrativeByDepartmentSql = administrativeByDepartmentSelectSql(hasAdministrativeByDepartmentColumn);
@@ -1503,10 +1561,13 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.expense_type,
         o.operation_expense,
         o.employee_benefits_expense,
-        o.bonus_expense,
-        o.salary_expense,
-         o.administrative_expense,
-         o.individual_income_tax_by_department,
+         o.bonus_expense,
+         o.salary_expense,
+          o.administrative_expense,
+          o.salary_by_department,
+          o.social_insurance_by_department,
+          o.office_space_by_department,
+          o.individual_income_tax_by_department,
          ${bonusByDepartmentSql} AS bonus_by_department,
          ${officeEquipmentByDepartmentSql} AS office_equipment_by_department,
          ${administrativeByDepartmentSql} AS administrative_by_department,
@@ -1551,10 +1612,13 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.expense_type,
         o.operation_expense,
         o.employee_benefits_expense,
-        o.bonus_expense,
-        o.salary_expense,
-         o.administrative_expense,
-         o.individual_income_tax_by_department,
+         o.bonus_expense,
+         o.salary_expense,
+          o.administrative_expense,
+          o.salary_by_department,
+          o.social_insurance_by_department,
+          o.office_space_by_department,
+          o.individual_income_tax_by_department,
          ${bonusByDepartmentSql} AS bonus_by_department,
          ${officeEquipmentByDepartmentSql} AS office_equipment_by_department,
          ${administrativeByDepartmentSql} AS administrative_by_department,
@@ -1599,10 +1663,13 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         o.expense_type,
         o.operation_expense,
         o.employee_benefits_expense,
-        o.bonus_expense,
-        o.salary_expense,
-         o.administrative_expense,
-         o.individual_income_tax_by_department,
+         o.bonus_expense,
+         o.salary_expense,
+          o.administrative_expense,
+          o.salary_by_department,
+          o.social_insurance_by_department,
+          o.office_space_by_department,
+          o.individual_income_tax_by_department,
          ${bonusByDepartmentSql} AS bonus_by_department,
          ${officeEquipmentByDepartmentSql} AS office_equipment_by_department,
          ${administrativeByDepartmentSql} AS administrative_by_department,
@@ -1616,11 +1683,7 @@ export async function fetchApprovalExpenseDetails(dateRange) {
       ${paymentDateWhereFor('event')}
         AND event.status = 'confirmed'
         AND ${ELIGIBLE_PAYMENT_EVENT_SOURCE_SQL}
-         AND NOT EXISTS (
-          SELECT 1
-          FROM approval_expense_dept_split event_split
-           WHERE event_split.business_id = event.business_id
-         )
+         AND NOT ${departmentSplitEvidenceSql('o', departmentSplitJsonColumns)}
       UNION ALL
       SELECT
         'purchase'::text AS expense_kind,
@@ -1657,6 +1720,9 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS bonus_expense,
         NULL::varchar AS salary_expense,
          NULL::varchar AS administrative_expense,
+         NULL::jsonb AS salary_by_department,
+         NULL::jsonb AS social_insurance_by_department,
+         NULL::jsonb AS office_space_by_department,
          NULL::jsonb AS individual_income_tax_by_department,
          NULL::jsonb AS bonus_by_department,
          NULL::jsonb AS office_equipment_by_department,
@@ -1708,6 +1774,9 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS bonus_expense,
         NULL::varchar AS salary_expense,
          NULL::varchar AS administrative_expense,
+         NULL::jsonb AS salary_by_department,
+         NULL::jsonb AS social_insurance_by_department,
+         NULL::jsonb AS office_space_by_department,
          NULL::jsonb AS individual_income_tax_by_department,
          NULL::jsonb AS bonus_by_department,
          NULL::jsonb AS office_equipment_by_department,
@@ -1756,6 +1825,9 @@ export async function fetchApprovalExpenseDetails(dateRange) {
         NULL::varchar AS bonus_expense,
         NULL::varchar AS salary_expense,
          NULL::varchar AS administrative_expense,
+         NULL::jsonb AS salary_by_department,
+         NULL::jsonb AS social_insurance_by_department,
+         NULL::jsonb AS office_space_by_department,
          NULL::jsonb AS individual_income_tax_by_department,
          NULL::jsonb AS bonus_by_department,
          NULL::jsonb AS office_equipment_by_department,

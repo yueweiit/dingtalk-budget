@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import {
   bonusByDepartmentSelectSql,
   administrativeByDepartmentSelectSql,
+  departmentSplitEvidenceSql,
+  legacyJsonExpenseSplitRows,
   mergeExpenseSplitRows,
   officeEquipmentByDepartmentSelectSql,
   summarizeApprovedDetails,
@@ -111,10 +113,47 @@ test('payment-event query includes final-approval fallbacks without bypassing de
   assert.match(source, /'completed_department_split'::text AS accounting_source/);
   assert.match(source, /'completed_approval_fallback'::text AS accounting_source/);
   assert.match(source, /JOIN approval_expense_operation o ON o\.business_id = event\.business_id/);
-  assert.match(source, /FROM approval_expense_dept_split event_split/);
+  assert.match(source, /departmentSplitEvidenceSql\('o', departmentSplitJsonColumns\)/);
+  assert.match(source, /jsonb_array_length/);
   assert.match(source, /event\.paid_at AS accounting_at/);
   assert.match(source, /event\.source_type IN \('comment_explicit_amount', 'fully_deducted'\)/);
   assert.match(source, /completedApprovalResultSql\('p'\)\} AS result/);
+});
+
+test('treats legacy JSON department splits as evidence that excludes whole-form accounting', () => {
+  const sql = departmentSplitEvidenceSql('o');
+
+  assert.match(sql, /approval_expense_dept_split split/);
+  assert.match(sql, /o\.salary_by_department/);
+  assert.match(sql, /o\.administrative_by_department/);
+  assert.match(sql, /o\.individual_income_tax_by_department/);
+  assert.match(sql, /jsonb_typeof\(o\.salary_by_department\)/);
+});
+
+test('uses a legacy salary JSON split when a normalized split row is unavailable', () => {
+  const rows = legacyJsonExpenseSplitRows({
+    business_id: 'legacy-salary-split',
+    salary_by_department: [{
+      department: '财务中心',
+      department_id: '1089928990',
+      amount: 62850,
+    }],
+  });
+
+  assert.deepEqual(rows, [{
+    business_id: 'legacy-salary-split',
+    split_type: 'salary',
+    category_key: null,
+    category_name: null,
+    category: 'salary',
+    department: '财务中心',
+    department_id: '1089928990',
+    department_source: 'name_only',
+    department_path_ids: null,
+    department_path_names: null,
+    amount: 62850,
+    note: '',
+  }]);
 });
 
 test('payment-event query exposes payment date, amount, currency, and comment evidence', () => {
