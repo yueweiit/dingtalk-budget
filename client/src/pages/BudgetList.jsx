@@ -956,7 +956,12 @@ export default function BudgetList({ onGoToVisual, onGoToConfiguration, user, on
 
     setExporting(true);
     try {
-      const result = await getReportData({ startDate, endDate, includeApproved: 1 });
+      const result = await getReportData({
+        startDate,
+        endDate,
+        includeApproved: 1,
+        includeApprovalEfficiency: user?.role === 'superadmin' ? 1 : 0,
+      });
       const scopedReportData = filterReportDataForExport(result.data || {}, activeTab);
       const workbook = createBudgetReportWorkbook({
         ...scopedReportData,

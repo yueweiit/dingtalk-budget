@@ -26,7 +26,7 @@ A budget management system that syncs approval data from DingTalk (钉钉) into 
 - Manual sync with date range selection
 - Production / Non-production budget tabs with pagination
 - Budget detail modal with full form data
-- 7-sheet XLSX report export (summary, execution, department share, expense details, etc.)
+- Budget XLSX report export, plus approval efficiency summary and task details for super administrators
 - DingTalk bot query endpoint (`/api/dingtalk/querySimple`)
 - Pending approval auto-retry with backfill mechanism
 - Actual expense reporting uses the whole approval's completed-and-agreed result and UTC completion month; budget application amounts keep their original submission-time rule
@@ -226,6 +226,8 @@ Open http://localhost:5173 in your browser.
 | GET    | `/api/dingtalk/querySimple`     | DingTalk bot query       |
 | GET    | `/api/dingtalk/alert-budget-snapshot` | Internal budget-alert snapshot; requires `X-Budget-Alert-Key` and returns aggregate amounts only |
 | GET    | `/api/health`                   | Health check             |
+
+预算执行、审批效率和导出口径见 [`docs/BUDGET_REPORTING_GUIDE.md`](docs/BUDGET_REPORTING_GUIDE.md)。项目维度在具备稳定项目 ID 前不启用。
 
 The budget-alert snapshot endpoint is only for the OA alert service. It reuses the production budget, shared-department rollup, and actual-expense aggregation rules, and returns budget, used, application, projected amounts and alert level without exposing approval or expense detail rows.
 

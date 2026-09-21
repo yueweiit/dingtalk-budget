@@ -1,4 +1,4 @@
-import { formatUtcDate, formatUtcMonth } from './utcDate.js';
+import { formatBeijingDateTime, formatUtcDate, formatUtcMonth } from './utcDate.js';
 import { departmentDisplayName, departmentIdentityKey } from './departmentIdentity.js';
 import {
   buildPaymentCountMap,
@@ -930,7 +930,7 @@ export const buildExpenseShareRows = (approvedDetailRows) => {
   return groupShareRows(rows, ['departmentIdentityKey', 'month'], 'amount');
 };
 
-export const createBudgetReportWorkbook = ({ production = [], nonProduction = [], pendingProduction = [], pendingNonProduction = [], pendingExpenses = [], approvedExpenses = [], approvedExpenseDetails = [], reportStartDate = '', reportEndDate = '' }) => {
+export const createBudgetReportWorkbook = ({ production = [], nonProduction = [], pendingProduction = [], pendingNonProduction = [], pendingExpenses = [], approvedExpenses = [], approvedExpenseDetails = [], approvalEfficiency = null, reportStartDate = '', reportEndDate = '' }) => {
   const operationRows = buildOperationRows(nonProduction);
   const productionRows = buildProductionRows(production);
   const reportMonth = resolveReportMonth(reportStartDate, reportEndDate);
@@ -1058,6 +1058,17 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
       executionRows,
     }),
   );
+
+  if (approvalEfficiency?.summary) {
+    summarySheetRows.push(
+      ['审批实例数', approvalEfficiency.summary.totalInstances],
+      ['平均审批完成时长（小时）', approvalEfficiency.summary.averageCompletionHours],
+      ['当前审批中实例数', approvalEfficiency.summary.runningInstances],
+      ['审批超时节点数', approvalEfficiency.summary.overdueTasks],
+      ['审批节点超时率', `${approvalEfficiency.summary.taskOverdueRate}%`],
+      ['平均审批节点耗时（小时）', approvalEfficiency.summary.averageTaskHours],
+    );
+  }
 
   const approvedDetailSheetRows = [
     ['序号', '支出类型', '所属部门', '月份', '业务编号', '标题', '原始金额', '本位币金额(CNY)', '审批状态', '申请日期', '创建日期', '审批完成日期', '记账日期', '记账来源', '付款期次', '付款金额', '付款评论', '业务动作', '备注'],
@@ -1250,6 +1261,40 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     ]),
   ];
 
+  const approvalEfficiencySheetRows = [
+    ['流程名称', '流程编码', '实例数', '已完成', '审批中', '平均完成时长（小时）', '平均节点耗时（小时）', '超时节点数', '节点超时率', '超时标准（小时）'],
+    ...(approvalEfficiency?.byProcess || []).map((row) => [
+      row.processName,
+      row.processCode,
+      row.totalInstances,
+      row.completedInstances,
+      row.runningInstances,
+      row.averageCompletionHours,
+      row.averageTaskHours,
+      row.overdueTasks || 0,
+      `${row.taskOverdueRate}%`,
+      approvalEfficiency.timeoutHours,
+    ]),
+  ];
+
+  const approvalTaskSheetRows = [
+    ['审批实例ID', '流程编码', '审批标题', '任务ID', '节点名称', '审批人UserID', '审批人', '节点状态', '开始时间（北京时间）', '结束时间（北京时间）', '节点耗时（小时）', '是否超时'],
+    ...(approvalEfficiency?.taskDetails || []).map((row) => [
+      row.processInstanceId,
+      row.processCode,
+      row.title,
+      row.taskId,
+      row.nodeName,
+      row.approverUserId,
+      row.approverUserName,
+      row.status,
+      formatBeijingDateTime(row.startTime),
+      formatBeijingDateTime(row.endTime),
+      row.durationHours ?? '',
+      row.overdue ? '是' : '否',
+    ]),
+  ];
+
   const sheets = [
     { name: '汇总', rows: summarySheetRows, widths: [28, 18] },
     { name: '地区预算分布', rows: regionSheetRows, widths: [8, 14, 18, 18, 18] },
@@ -1261,6 +1306,12 @@ export const createBudgetReportWorkbook = ({ production = [], nonProduction = []
     { name: '实际支出明细', rows: approvedDetailSheetRows, widths: [8, 12, 28, 14, 24, 36, 14, 18, 14, 14, 14, 16, 14, 14, 14, 14, 22, 14, 24] },
     { name: '非生产预算明细', rows: operationSheetRows, widths: [8, 22, 16, 14, 14, 18, 14, 10, 24, 14, 34, 22, 14, 14] },
   ];
+  if (approvalEfficiency) {
+    sheets.push(
+      { name: '审批效率汇总', rows: approvalEfficiencySheetRows, widths: [28, 28, 12, 12, 12, 22, 22, 14, 14, 18] },
+      { name: '审批节点明细', rows: approvalTaskSheetRows, widths: [30, 28, 36, 24, 24, 24, 16, 14, 24, 24, 20, 12] },
+    );
+  }
 
   const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">

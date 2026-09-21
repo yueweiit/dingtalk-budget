@@ -181,18 +181,22 @@ export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
   const [loading, setLoading] = useState(false);
   const [trendLoading, setTrendLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [warnings, setWarnings] = useState([]);
   const [trendErrorMessage, setTrendErrorMessage] = useState('');
 
   const fetchReport = async () => {
     setLoading(true);
     setErrorMessage('');
+    setWarnings([]);
     try {
       const result = await getReportData({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         includeApproved: 1,
+        includeApprovalEfficiency: user?.role === 'superadmin' ? 1 : 0,
       });
       setReportData(result.data || {});
+      setWarnings(Array.isArray(result.warnings) ? result.warnings : []);
     } catch (error) {
       console.error('Fetch report error:', error);
       setErrorMessage(error.response?.data?.message || error.message || '加载报表数据失败');
@@ -268,6 +272,8 @@ export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
   if (!chartData) return <div style={styles.empty}>暂无报表数据</div>;
 
   const { deptSummary, trend, trendYear, typeDist, execRate, deptComp, regionDist, execStatus, stats } = chartData;
+  const approvalEfficiency = reportData?.approvalEfficiency;
+  const formatHours = (value) => `${Number(value || 0).toFixed(1)} 小时`;
 
   return (
     <div style={styles.page}>
@@ -305,6 +311,12 @@ export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
           </button>
         </div>
 
+        {warnings.length > 0 && (
+          <div style={{ padding: '10px 12px', marginBottom: '16px', border: '1px solid #f59e0b', background: '#fffbeb', color: '#92400e', borderRadius: '6px', fontSize: '13px' }}>
+            {warnings.join('；')}
+          </div>
+        )}
+
         <div style={styles.statsRow}>
           <div style={styles.statCard}>
             <div style={styles.statValue}>{stats.productionCount}</div>
@@ -335,6 +347,59 @@ export default function VisualReportEchartsStyle({ onBack, user, onLogout }) {
             <div style={styles.statLabel}>整体执行率</div>
           </div>
         </div>
+
+        {approvalEfficiency && (
+          <div style={{ ...styles.chartFull, marginBottom: '16px' }}>
+            <h3 style={styles.chartTitle}>审批效率（超时标准：{approvalEfficiency.timeoutHours} 小时）</h3>
+            <div style={styles.statsRow}>
+              <div style={styles.statCard}>
+                <div style={styles.statValue}>{approvalEfficiency.summary.totalInstances}</div>
+                <div style={styles.statLabel}>审批实例数</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statValue}>{formatHours(approvalEfficiency.summary.averageCompletionHours)}</div>
+                <div style={styles.statLabel}>平均完成时长</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statValue}>{approvalEfficiency.summary.runningInstances}</div>
+                <div style={styles.statLabel}>当前审批中</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={{ ...styles.statValue, color: '#b91c1c' }}>{approvalEfficiency.summary.taskOverdueRate}%</div>
+                <div style={styles.statLabel}>节点超时率</div>
+              </div>
+              <div style={styles.statCard}>
+                <div style={styles.statValue}>{formatHours(approvalEfficiency.summary.averageTaskHours)}</div>
+                <div style={styles.statLabel}>平均节点耗时</div>
+              </div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr>
+                    {['流程', '实例数', '已完成', '审批中', '平均完成时长', '平均节点耗时', '超时节点', '节点超时率'].map((label) => (
+                      <th key={label} style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', color: '#6b7280' }}>{label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvalEfficiency.byProcess.map((row) => (
+                    <tr key={row.processCode}>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{row.processName}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{row.totalInstances}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{row.completedInstances}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{row.runningInstances}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{formatHours(row.averageCompletionHours)}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{formatHours(row.averageTaskHours)}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{row.overdueTasks || 0}</td>
+                      <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{row.taskOverdueRate}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         <div style={styles.chartGrid}>
           <div style={styles.chartCard}>

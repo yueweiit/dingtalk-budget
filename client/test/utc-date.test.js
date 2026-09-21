@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formatUtcDate, formatUtcDateTime, formatUtcMonth } from '../src/utils/utcDate.js';
+import { formatBeijingDateTime, formatUtcDate, formatUtcDateTime, formatUtcMonth } from '../src/utils/utcDate.js';
 
 test('UTC formatters keep UTC dates at the month boundary', () => {
   const value = '2026-07-31T23:30:00.000Z';
@@ -9,4 +9,10 @@ test('UTC formatters keep UTC dates at the month boundary', () => {
   assert.equal(formatUtcDateTime(value), '2026-07-31 23:30');
   assert.equal(formatUtcDate(value), '2026-07-31');
   assert.equal(formatUtcMonth(value), '2026-07');
+});
+
+test('审批节点导出固定使用北京时间并包含秒', () => {
+  assert.equal(formatBeijingDateTime('2026-09-18T04:04:00.000Z'), '2026-09-18 12:04:00');
+  assert.equal(formatBeijingDateTime('2026-09-18T20:04:05.000Z'), '2026-09-19 04:04:05');
+  assert.equal(formatBeijingDateTime(null), '');
 });

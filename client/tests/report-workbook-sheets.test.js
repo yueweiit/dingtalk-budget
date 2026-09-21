@@ -105,3 +105,57 @@ test('导出报表不包含任何嵌入式图表或绘图文件', async () => {
   assert.equal(workbook.includes('relationships/drawing'), false);
   assert.equal(workbook.includes('<drawing '), false);
 });
+
+test('超级管理员导出包含审批效率汇总和节点明细', async () => {
+  const workbook = await workbookXmlText({
+    approvalEfficiency: {
+      timeoutHours: 24,
+      summary: {
+        totalInstances: 2,
+        averageCompletionHours: 12,
+        runningInstances: 1,
+        overdueInstances: 1,
+        overdueRate: 50,
+        overdueTasks: 1,
+        taskOverdueRate: 50,
+        averageTaskHours: 6,
+      },
+      byProcess: [{
+        processName: '费用审批',
+        processCode: 'PROC-1',
+        totalInstances: 2,
+        completedInstances: 1,
+        runningInstances: 1,
+        averageCompletionHours: 12,
+        overdueInstances: 1,
+        overdueRate: 50,
+        averageTaskHours: 6,
+        overdueTasks: 1,
+        taskOverdueRate: 50,
+      }],
+      taskDetails: [{
+        processInstanceId: 'instance-1',
+        processCode: 'PROC-1',
+        title: '测试审批',
+        taskId: 'task-1',
+        nodeName: '财务审批',
+        approverUserId: 'user-1',
+        approverUserName: '张三',
+        status: 'COMPLETED',
+        startTime: '2026-09-01T00:00:00.000Z',
+        endTime: '2026-09-01T06:00:00.000Z',
+        durationHours: 6,
+        overdue: false,
+      }],
+    },
+  });
+
+  assert.ok(workbook.includes('name="审批效率汇总"'));
+  assert.ok(workbook.includes('name="审批节点明细"'));
+  assert.ok(workbook.includes('财务审批'));
+  assert.ok(workbook.includes('张三'));
+  assert.ok(workbook.includes('开始时间（北京时间）'));
+  assert.ok(workbook.includes('2026-09-01 08:00:00'));
+  assert.ok(workbook.includes('2026-09-01 14:00:00'));
+  assert.equal(workbook.includes('开始时间（UTC）'), false);
+});

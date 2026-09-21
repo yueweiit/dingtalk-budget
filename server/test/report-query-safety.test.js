@@ -32,3 +32,11 @@ test('visual report receives ordinary pending expenses separately from budget pe
   assert.match(reportSource, /pendingProductionRows = await fetchPendingBudgetRows/);
   assert.match(reportSource, /pendingNonProductionRows = await fetchPendingBudgetRows/);
 });
+
+test('approval efficiency is opt-in and restricted to super administrators', () => {
+  const reportSource = source.slice(source.indexOf("router.get('/report'"));
+  assert.match(reportSource, /includeApprovalEfficiency/);
+  assert.match(reportSource, /req\.authUser\?\.role === 'superadmin'/);
+  assert.match(reportSource, /fetchApprovalEfficiency\(approvalClient/);
+  assert.match(reportSource, /审批效率数据暂不可用，预算报表仍可正常使用/);
+});

@@ -33,3 +33,21 @@ export function formatUtcMonth(value) {
   if (!date) return raw;
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}`;
 }
+
+export function formatBeijingDateTime(value) {
+  if (!value) return '';
+  const date = parseUtcDate(value);
+  if (!date) return String(value);
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const valueFor = (type) => parts.find((part) => part.type === type)?.value || '';
+  return `${valueFor('year')}-${valueFor('month')}-${valueFor('day')} ${valueFor('hour')}:${valueFor('minute')}:${valueFor('second')}`;
+}

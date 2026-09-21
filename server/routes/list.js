@@ -26,6 +26,7 @@ import {
   departmentRecordVisible,
   requireAuth,
 } from '../services/auth.js';
+import { fetchApprovalEfficiency } from '../services/approval-efficiency.js';
 
 const router = express.Router();
 const { Client } = pg;
@@ -33,6 +34,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const APPROVAL_DB_DATABASE = process.env.APPROVAL_DB_DATABASE ||
   process.env.DINGTALK_APPROVAL_DATABASE ||
   'dingtalk_approval';
+const OA_DB_DATABASE = process.env.OA_DB_DATABASE || 'dingtalk_oa';
 const APPROVED_EXPENSE_CACHE_TTL_MS = Number(process.env.APPROVED_EXPENSE_CACHE_TTL_MS || 60 * 1000);
 const EXPENSE_SPLIT_CACHE_TTL_MS = Number(process.env.EXPENSE_SPLIT_CACHE_TTL_MS || 60 * 1000);
 
@@ -2625,7 +2627,7 @@ router.get('/stats', async (req, res) => {
 // GET /api/list/report - 获取报表导出数据（主表 + 明细）
 router.get('/report', async (req, res) => {
   try {
-    const { startDate, endDate, includeApproved } = req.query;
+    const { startDate, endDate, includeApproved, includeApprovalEfficiency } = req.query;
 
     const exportClient = new Client({
       host: process.env.PGHOST,
@@ -2674,6 +2676,28 @@ router.get('/report', async (req, res) => {
       warnings = approved.warnings;
     }
 
+    let approvalEfficiency = null;
+    const shouldIncludeApprovalEfficiency = String(includeApprovalEfficiency || '') === '1';
+    if (shouldIncludeApprovalEfficiency && req.authUser?.role === 'superadmin') {
+      const approvalClient = new Client({
+        host: process.env.OA_DB_HOST || process.env.APPROVAL_DB_HOST || process.env.PGHOST,
+        port: Number(process.env.OA_DB_PORT || process.env.APPROVAL_DB_PORT || process.env.PGPORT || 5432),
+        database: OA_DB_DATABASE,
+        user: process.env.OA_DB_USER || process.env.APPROVAL_DB_USER || process.env.PGUSER,
+        password: process.env.OA_DB_PASSWORD || process.env.APPROVAL_DB_PASSWORD || process.env.PGPASSWORD,
+        connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 2000),
+      });
+      try {
+        await approvalClient.connect();
+        approvalEfficiency = await fetchApprovalEfficiency(approvalClient, { startDate, endDate });
+      } catch (error) {
+        console.error('[WARN] Approval efficiency unavailable:', error.message);
+        warnings.push('审批效率数据暂不可用，预算报表仍可正常使用');
+      } finally {
+        await approvalClient.end().catch(() => {});
+      }
+    }
+
     const productionRows = await attachExpenseAmounts(
       productionRowsRaw,
       {
@@ -2707,6 +2731,9 @@ router.get('/report', async (req, res) => {
     if (shouldIncludeApproved) {
       responseData.approvedExpenses = approvedItems;
       responseData.approvedExpenseDetails = reportApprovedDetails;
+    }
+    if (approvalEfficiency) {
+      responseData.approvalEfficiency = approvalEfficiency;
     }
 
     res.json({
