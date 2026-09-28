@@ -273,4 +273,4 @@ The report also contains one explicit historical correction for business number 
 
 Before deployment, verify that `approval_expense_payment_events` and its indexes exist in the approval database. Code deployment does not migrate the server database automatically.
 
-The budget service accepts the comma-separated `DINGTALK_PAYMENT_EVENT_USER_IDS` environment variable for authorized payment-comment users. If it is absent, it uses the two formal users configured in code. Temporary local test users must be supplied only in the local process environment and must not be added to the production environment.
+The budget service accepts the comma-separated `DINGTALK_PAYMENT_EVENT_USER_IDS` environment variable for authorized payment-comment users. If it is absent, it uses the three formal users configured in code. Temporary local test users must be supplied only in the local process environment and must not be added to the production environment.

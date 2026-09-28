@@ -175,4 +175,5 @@ test('payment-event authorization is configurable while retaining the formal def
   assert.match(source, /DINGTALK_PAYMENT_EVENT_USER_IDS/);
   assert.match(source, /57521312381178275/);
   assert.match(source, /02183637680221426194/);
+  assert.match(source, /031632176526733808021/);
 });
