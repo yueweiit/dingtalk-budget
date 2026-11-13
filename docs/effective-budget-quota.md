@@ -4,11 +4,13 @@
 
 预算申请主表继续保存审批中、通过、撤销和驳回等完整历史。只有钉钉 OA 审批已通过的预算申请，才会写入 `budget_effective_quota`（有效预算额度台账），用于后续余额、执行率和预警计算。
 
+当前实现说明（2026-10-19 静态复核）：配置中心已读取该台账；列表、报表及预警仍读取预算申请主表，尚未统一切换到有效额度。因此上文“后续”表示目标用途，不表示已实现统一余额核算。预算主表按来源更新而非追加每次版本，也不能当作完整变更审计流水。依据：[额度查询](../server/services/quota-configuration.js)、[报表](../server/routes/list.js)、[预警](../server/routes/dingtalk.js)、[同步](../server/routes/sync.js)。
+
 本阶段预算维度固定为：年度、月度、集团、子公司、部门、预算科目和负责人。当前预算申请表没有稳定的“项目归属”组件，因此不建立业务项目维度，也不能把表单中的“预算项目”明细组件误当作项目归属。
 
 ## 数据来源和关联
 
-- OA 是审批状态、企业标识和原始表单的事实来源。
+- 审批状态、企业标识和原始表单来自钉钉，当前适配器可直连钉钉或读取外部 OA 保存的审批数据；模式由配置决定。依据：[dingtalk.js](../server/services/dingtalk.js)。
 - 有效额度唯一键为 `corp_id`（企业标识）加 `process_instance_id`（审批实例标识）。不能只用表单编号或业务编号关联多子公司数据。
 - 集团使用 OA 部门路径中已确认的集团根节点（`YUEWEI`、`悦为集团` 或 `悦为集团YUEWEI Grupo`）的稳定部门 ID 和名称确定；子公司为该根节点的直属下级。路径不完整时保持为空，不按名称猜测。
 - 对已由历史组织树和人员迁移记录共同确认的旧部门，服务端可将有效额度映射到当前稳定部门 ID。PD&PM、OBG 等曾拆分的旧部门必须同时精确匹配申请人用户 ID；PMO 项目管理办公室（`1058952936`）和 SG 销售小组（`1059634386`）尚未确认，不映射，继续显示为待确认。
@@ -38,11 +40,11 @@
 
 ## 组织树更新与历史对账
 
-- OA 项目使用 `npm run sync:departments` 从钉钉递归读取完整部门树；只有完整读取成功后才会停用旧树中不再出现的节点。
+- 既有部署约定由 OA 项目运行 `npm run sync:departments` 更新完整部门树；该命令及完整读取后停用旧节点的行为属于外部实现，本仓库无法确认，执行前需到 OA 项目核实。
 - 预算项目使用 `npm run reconcile:effective-organizations` 将生效额度按 `corp_id + department_id` 对照最新 OA 树，刷新集团、子公司、部门名称和路径。
 - `organization_is_current = true` 表示部门 ID 仍在最新树中，或该记录命中了已确认的历史部门映射；失效或无法匹配的历史审批仍保留在明细中，但不会进入当前组织筛选项。
 - 同名部门不按名称合并。不同稳定部门 ID 即使名称相同，也视为不同子公司下的不同部门；同一稳定 ID 的历史多语言名称统一显示为当前部门树名称。
 
 ## 部署顺序
 
-先在目标 `budget_system`（预算系统数据库）执行 `sql/ensure-effective-budget-quota.sql`，再部署预算服务。历史回填使用 `server/scripts/backfill-effective-budget-quota.js`，必须显式提供完整范围：`--start=<ISO 日期时间> --end=<ISO 日期时间>`；它只读取 OA 审批与部门树，只写入有效额度台账，不更新原预算申请主表或明细。任一单据回填失败时脚本以非零状态结束，必须先处理失败项再宣告回填完成。部署后核对有效额度、负责人、部门路径、子公司和科目明细；组织树变化后依次运行 OA 的 `npm run sync:departments` 和预算项目的 `npm run reconcile:effective-organizations`。不应在 OA 或审批支出同步数据库中创建预算余额字段。
+经授权实施时，先准备预算库的 `sql/ensure-effective-budget-quota.sql`，再部署预算服务，实际库名以 PGDATABASE 为准。历史回填使用 [backfill-effective-budget-quota.js](../server/scripts/backfill-effective-budget-quota.js)，必须显式提供完整范围：`--start=<ISO 日期时间> --end=<ISO 日期时间>`；审批源由配置选择 OA 或钉钉，组织信息读取 OA，只写本地有效额度及科目，不更新原预算申请主表或明细。单据失败计入 failed 并使进程非零结束，missingSourceKey 单独计数，仍需核对跳过记录。部署后核对有效额度、负责人、部门路径、子公司和科目明细；组织树变化先由外部 OA 更新，再由获准的预算组织重核任务处理。不应在 OA 或审批支出同步数据库中创建预算余额字段。本次仅更新说明，没有执行这些命令。
